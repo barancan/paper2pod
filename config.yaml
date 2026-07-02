@@ -1,0 +1,18 @@
+transcript:
+  provider: anthropic # anthropic | openai
+  model: claude-sonnet-4-6
+  max_input_tokens: 12000
+  target_words: [320, 420]
+
+tts:
+  provider: edge # edge | elevenlabs
+  voice: en-US-GuyNeural
+  rate: "+8%" # slight pace-up to match the reference style
+
+storage:
+  bucket: recordings
+  upsert: false
+
+logging:
+  level: INFO
+  file: logs/paper2pod.log
