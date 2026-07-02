@@ -1,0 +1,189 @@
+"""Provider-agnostic Two Minute Papers style transcript generation."""
+
+from __future__ import annotations
+
+import re
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any
+
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
+
+from paper2pod.logging_setup import TranscriptError
+from paper2pod.parser import PaperMetadata
+
+WORDS_PER_MINUTE = 150
+
+SYSTEM_PROMPT_TEMPLATE = """You are the narrator for a Two Minute Papers-style science \
+video. You turn dense research paper text into an enthusiastic, ear-friendly narration \
+script meant to be read aloud.
+
+Voice and tone:
+- Enthusiastic and accessible, like you can't wait to share this discovery.
+- Address the listener directly in second person (e.g. "Now, hold on to your papers, \
+because...").
+- Warm, curious, a little playful -- never dry or academic.
+
+Structure, in this order:
+1. Hook: open with a vivid, curiosity-grabbing line about the problem or promise.
+2. What the researchers did: plainly describe the approach.
+3. Why it's hard: give the listener a sense of the challenge being solved.
+4. Key result: state the headline finding with one concrete number.
+5. Limitation: briefly and honestly note a limitation or caveat.
+6. Closing: sign off with an enthusiastic, varied close in the spirit of "What a time to \
+be alive!" -- do not use that exact line every time.
+
+Formatting rules (strict):
+- Plain speech only. No markdown, no bullet points, no headers, no asterisks, no backticks.
+- No citations, no URLs, no reference numbers.
+- Write every number the way it should be spoken aloud (e.g. "thirty-five thousand", not \
+"35,000"; "two and a half times", not "2.5x").
+- Target length: {min_words} to {max_words} words -- aim for the middle of that range.
+
+Output only the narration text itself, with no preamble, labels, or commentary."""
+
+MARKDOWN_ARTIFACT_RE = re.compile(r"[*_`#]+")
+MARKDOWN_BULLET_RE = re.compile(r"^\s*[-•]\s+", re.MULTILINE)
+
+
+@dataclass
+class Transcript:
+    text: str
+    title: str
+    authors: list[str]
+    word_count: int
+    estimated_duration_s: float
+
+
+ProviderCall = Callable[[str, str, list[dict[str, str]]], str]
+
+
+def _anthropic_messages_call(
+    model: str, system: str, messages: list[dict[str, str]], secrets: Any
+) -> str:
+    import anthropic
+
+    client = anthropic.Anthropic(api_key=secrets.anthropic_api_key)
+    resp = client.messages.create(model=model, max_tokens=1024, system=system, messages=messages)
+    return resp.content[0].text
+
+
+def _openai_messages_call(
+    model: str, system: str, messages: list[dict[str, str]], secrets: Any
+) -> str:
+    import openai
+
+    client = openai.OpenAI(api_key=secrets.openai_api_key)
+    full_messages = [{"role": "system", "content": system}, *messages]
+    resp = client.chat.completions.create(model=model, max_tokens=1024, messages=full_messages)
+    return resp.choices[0].message.content or ""
+
+
+def _bind_provider_call(provider: str, secrets: Any) -> ProviderCall:
+    if provider == "anthropic":
+        return lambda model, system, messages: _anthropic_messages_call(
+            model, system, messages, secrets
+        )
+    if provider == "openai":
+        return lambda model, system, messages: _openai_messages_call(
+            model, system, messages, secrets
+        )
+    raise TranscriptError(f"Unknown transcript provider: {provider}")
+
+
+def _is_retryable(exc: BaseException) -> bool:
+    """Retry only on 429/5xx/network errors; 401 and other client errors fail fast."""
+    status_code = getattr(exc, "status_code", None)
+    if status_code is not None:
+        return status_code == 429 or status_code >= 500
+    return "Connection" in type(exc).__name__ or "Timeout" in type(exc).__name__
+
+
+def _call_with_retry(
+    call: ProviderCall, model: str, system: str, messages: list[dict[str, str]]
+) -> str:
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        retry=retry_if_exception(_is_retryable),
+        reraise=True,
+    )
+    def _do() -> str:
+        return call(model, system, messages)
+
+    try:
+        return _do()
+    except Exception as e:
+        status_code = getattr(e, "status_code", None)
+        if status_code == 401:
+            raise TranscriptError(
+                "Authentication failed (401). Check your API key in .env is correct."
+            ) from e
+        raise TranscriptError(f"Transcript generation failed: {e}") from e
+
+
+def _build_user_prompt(
+    metadata: PaperMetadata, paper_text: str, min_words: int, max_words: int
+) -> str:
+    authors = ", ".join(metadata.authors) if metadata.authors else "the researchers"
+    return (
+        f"Paper title: {metadata.title}\n"
+        f"Authors: {authors}\n\n"
+        f"Paper content:\n{paper_text}\n\n"
+        f"Write the narration script now, {min_words}-{max_words} words."
+    )
+
+
+def _compression_prompt(word_count: int, min_words: int, max_words: int) -> str:
+    return (
+        f"Your narration was {word_count} words, over the {max_words}-word cap. Revise it "
+        f"to be between {min_words} and {max_words} words while keeping the same structure, "
+        "energy, and key result. Return only the revised narration."
+    )
+
+
+def _clean_plain_speech(text: str) -> str:
+    text = MARKDOWN_ARTIFACT_RE.sub("", text)
+    text = MARKDOWN_BULLET_RE.sub("", text)
+    return text.strip()
+
+
+def _count_words(text: str) -> int:
+    return len(text.split())
+
+
+def generate(
+    paper_text: str,
+    metadata: PaperMetadata,
+    style_config: Any,
+    secrets: Any = None,
+    call_fn: ProviderCall | None = None,
+) -> Transcript:
+    """Generate a Two Minute Papers style transcript for the given paper."""
+    call = call_fn or _bind_provider_call(style_config.provider, secrets)
+    min_words, max_words = style_config.target_words
+
+    system_prompt = SYSTEM_PROMPT_TEMPLATE.format(min_words=min_words, max_words=max_words)
+    user_prompt = _build_user_prompt(metadata, paper_text, min_words, max_words)
+    messages: list[dict[str, str]] = [{"role": "user", "content": user_prompt}]
+
+    text = _clean_plain_speech(_call_with_retry(call, style_config.model, system_prompt, messages))
+    word_count = _count_words(text)
+
+    if word_count > max_words:
+        messages.append({"role": "assistant", "content": text})
+        messages.append(
+            {"role": "user", "content": _compression_prompt(word_count, min_words, max_words)}
+        )
+        text = _clean_plain_speech(
+            _call_with_retry(call, style_config.model, system_prompt, messages)
+        )
+        word_count = _count_words(text)
+
+    return Transcript(
+        text=text,
+        title=metadata.title,
+        authors=metadata.authors,
+        word_count=word_count,
+        estimated_duration_s=round(word_count / WORDS_PER_MINUTE * 60, 1),
+    )
