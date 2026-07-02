@@ -1,0 +1,175 @@
+{
+  "info": {
+    "name": "paper2pod - External APIs",
+    "description": "Reference requests for the external HTTP APIs paper2pod calls under the hood: Anthropic/OpenAI (transcript + metadata extraction), ElevenLabs (optional keyed TTS), and Supabase Storage (upload + URL resolution). paper2pod itself is a CLI with no server of its own; this collection is for debugging those integrations directly. Note: the default edge-tts provider uses a websocket protocol, not a plain REST call, so it is not included here.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "anthropic_base_url", "value": "https://api.anthropic.com" },
+    { "key": "anthropic_api_key", "value": "" },
+    { "key": "anthropic_model", "value": "claude-sonnet-4-6" },
+    { "key": "openai_base_url", "value": "https://api.openai.com" },
+    { "key": "openai_api_key", "value": "" },
+    { "key": "openai_model", "value": "gpt-4o-mini" },
+    { "key": "elevenlabs_api_key", "value": "" },
+    { "key": "elevenlabs_voice_id", "value": "21m00Tcm4TlvDq8ikWAM" },
+    { "key": "supabase_url", "value": "https://your-project.supabase.co" },
+    { "key": "supabase_service_role_key", "value": "" },
+    { "key": "supabase_bucket", "value": "recordings" },
+    { "key": "object_name", "value": "Sample Paper Title - Author One, Author Two.mp3" }
+  ],
+  "item": [
+    {
+      "name": "Transcript generation",
+      "item": [
+        {
+          "name": "Anthropic - Generate transcript",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "x-api-key", "value": "{{anthropic_api_key}}" },
+              { "key": "anthropic-version", "value": "2023-06-01" },
+              { "key": "content-type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{anthropic_base_url}}/v1/messages",
+              "host": ["{{anthropic_base_url}}"],
+              "path": ["v1", "messages"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"model\": \"{{anthropic_model}}\",\n  \"max_tokens\": 1024,\n  \"system\": \"You are the narrator for a science video. Write an enthusiastic, ear-friendly narration script in plain speech, 320 to 420 words, with no markdown and no citations.\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"Paper title: Example Paper\\nAuthors: Author One, Author Two\\n\\nPaper content:\\n<paste truncated paper body here>\\n\\nWrite the narration script now, 320-420 words.\"\n    }\n  ]\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Used for both the transcript.py narration call and the parser.py cheap metadata-extraction fallback (with a shorter prompt and max_tokens)."
+          }
+        },
+        {
+          "name": "OpenAI - Generate transcript",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{openai_api_key}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{openai_base_url}}/v1/chat/completions",
+              "host": ["{{openai_base_url}}"],
+              "path": ["v1", "chat", "completions"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"model\": \"{{openai_model}}\",\n  \"max_tokens\": 1024,\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are the narrator for a science video. Write an enthusiastic, ear-friendly narration script in plain speech, 320 to 420 words, with no markdown and no citations.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Paper title: Example Paper\\nAuthors: Author One, Author Two\\n\\nPaper content:\\n<paste truncated paper body here>\\n\\nWrite the narration script now, 320-420 words.\"\n    }\n  ]\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Alternate provider for transcript.py and the parser.py metadata-extraction fallback when transcript.provider=openai."
+          }
+        }
+      ]
+    },
+    {
+      "name": "TTS",
+      "item": [
+        {
+          "name": "ElevenLabs - Synthesize speech",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "xi-api-key", "value": "{{elevenlabs_api_key}}" },
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Accept", "value": "audio/mpeg" }
+            ],
+            "url": {
+              "raw": "https://api.elevenlabs.io/v1/text-to-speech/{{elevenlabs_voice_id}}",
+              "protocol": "https",
+              "host": ["api", "elevenlabs", "io"],
+              "path": ["v1", "text-to-speech", "{{elevenlabs_voice_id}}"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"Now, hold on to your papers, because this is a big one.\",\n  \"model_id\": \"eleven_monolingual_v1\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Only used when tts.provider=elevenlabs. The default edge-tts provider is a websocket protocol and has no plain REST equivalent, so it isn't represented here."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Supabase Storage",
+      "item": [
+        {
+          "name": "Upload recording",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{supabase_service_role_key}}" },
+              { "key": "apikey", "value": "{{supabase_service_role_key}}" },
+              { "key": "Content-Type", "value": "audio/mpeg" }
+            ],
+            "url": {
+              "raw": "{{supabase_url}}/storage/v1/object/{{supabase_bucket}}/{{object_name}}",
+              "host": ["{{supabase_url}}"],
+              "path": ["storage", "v1", "object", "{{supabase_bucket}}", "{{object_name}}"]
+            },
+            "body": {
+              "mode": "file",
+              "file": { "src": "" }
+            },
+            "description": "Select the local .mp3 in the Body > binary file picker before sending. Add header 'x-upsert: true' to overwrite an existing object instead of failing on collision."
+          }
+        },
+        {
+          "name": "Get bucket info (public vs private)",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{supabase_service_role_key}}" },
+              { "key": "apikey", "value": "{{supabase_service_role_key}}" }
+            ],
+            "url": {
+              "raw": "{{supabase_url}}/storage/v1/bucket/{{supabase_bucket}}",
+              "host": ["{{supabase_url}}"],
+              "path": ["storage", "v1", "bucket", "{{supabase_bucket}}"]
+            }
+          }
+        },
+        {
+          "name": "Get public URL",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{supabase_url}}/storage/v1/object/public/{{supabase_bucket}}/{{object_name}}",
+              "host": ["{{supabase_url}}"],
+              "path": ["storage", "v1", "object", "public", "{{supabase_bucket}}", "{{object_name}}"]
+            },
+            "description": "Only resolves to real audio if the bucket is public."
+          }
+        },
+        {
+          "name": "Create signed URL",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{supabase_service_role_key}}" },
+              { "key": "apikey", "value": "{{supabase_service_role_key}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{supabase_url}}/storage/v1/object/sign/{{supabase_bucket}}/{{object_name}}",
+              "host": ["{{supabase_url}}"],
+              "path": ["storage", "v1", "object", "sign", "{{supabase_bucket}}", "{{object_name}}"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"expiresIn\": 3600\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Used for private buckets; paper2pod requests a 1 hour signed URL after upload."
+          }
+        }
+      ]
+    }
+  ]
+}
