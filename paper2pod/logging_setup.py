@@ -55,6 +55,17 @@ class SourceError(Paper2PodError):
     stage = "source"
 
 
+class RecordError(Paper2PodError):
+    """Raised when writing/reading the episodes table fails.
+
+    Does not map to a dedicated pipeline exit code: a failure to record an
+    episode must not fail an otherwise-successful run (the audio is already
+    uploaded by the time this is raised).
+    """
+
+    stage = "record"
+
+
 def redact_secrets(text: str, secrets: Iterable[str]) -> str:
     """Replace any occurrence of a known secret value with a redaction marker."""
     for secret in secrets:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -48,6 +49,13 @@ def _is_collision_error(exc: Exception) -> bool:
     return "already exists" in message or "duplicate" in message
 
 
+@dataclass
+class UploadResult:
+    object_path: str  # the final object name actually used, post-collision-handling
+    url: str  # public or signed URL
+    is_public: bool
+
+
 def upload(
     client: Any,
     bucket: str,
@@ -55,8 +63,8 @@ def upload(
     local_path: Path,
     upsert: bool = False,
     max_collision_attempts: int = 20,
-) -> str:
-    """Upload local_path to Supabase Storage, returning the public/signed URL."""
+) -> UploadResult:
+    """Upload local_path to Supabase Storage, returning the object path, URL, and visibility."""
     storage = client.storage.from_(bucket)
     candidate = object_name
     file_options: dict[str, str] = {"content-type": "audio/mpeg"}
@@ -75,13 +83,19 @@ def upload(
         raise StorageError(f"Could not find a non-colliding object name for {object_name}")
 
     try:
-        return _resolve_url(client, bucket, candidate)
+        url, is_public = resolve_url(client, bucket, candidate)
     except Exception as e:
         raise StorageError(f"Uploaded but failed to resolve URL: {e}") from e
+    return UploadResult(object_path=candidate, url=url, is_public=is_public)
 
 
-def _resolve_url(client: Any, bucket: str, object_name: str) -> str:
-    """Print a public URL if the bucket is public, else a signed URL."""
+def resolve_url(client: Any, bucket: str, object_name: str) -> tuple[str, bool]:
+    """Resolve an object's public URL if the bucket is public, else a signed URL.
+
+    Returns (url, is_public). Callers that only need a fresh playback URL
+    for an already-known object (e.g. `paper2pod show`) can call this
+    directly without going through upload().
+    """
     storage = client.storage.from_(bucket)
     is_public = False
     try:
@@ -92,9 +106,9 @@ def _resolve_url(client: Any, bucket: str, object_name: str) -> str:
 
     if is_public:
         result = storage.get_public_url(object_name)
-        return str(result)
+        return str(result), True
 
     result = storage.create_signed_url(object_name, 3600)
     if isinstance(result, dict):
-        return result.get("signedURL") or result.get("signedUrl") or ""
-    return str(result)
+        return result.get("signedURL") or result.get("signedUrl") or "", False
+    return str(result), False

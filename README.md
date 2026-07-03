@@ -39,18 +39,24 @@ reference below). Never commit `.env`, it's already covered by
    whatever you set `storage.bucket` to in `config.yaml`). Mark it public if
    you want paper2pod to print a plain public URL; leave it private if you'd
    rather it print a signed URL that expires after an hour.
-2. **Fill in `.env`** with `ANTHROPIC_API_KEY` (or `OPENAI_API_KEY` if you
+2. **Create the `episodes` table.** One-time manual step: open the
+   Supabase dashboard's SQL Editor (New query) and paste in the contents of
+   `supabase/schema.sql`, then run it. This is what every successful run
+   gets recorded into (see "Episode records" below); paper2pod does not
+   create the table for you.
+3. **Fill in `.env`** with `ANTHROPIC_API_KEY` (or `OPENAI_API_KEY` if you
    set `transcript.provider: openai`), `SUPABASE_URL`, and
    `SUPABASE_SERVICE_ROLE_KEY`.
-3. **Preview a transcript without spending on TTS or storage:**
+4. **Preview a transcript without spending on TTS or storage:**
    ```bash
    paper2pod run tests/fixtures/sample_paper.md --dry-run
    ```
-4. **Run the full pipeline:**
+5. **Run the full pipeline:**
    ```bash
    paper2pod run path/to/your_paper.md
    ```
-   On success this prints the public or signed URL of the uploaded MP3.
+   On success this prints the public or signed URL of the uploaded MP3, and
+   records the episode so it's browsable with `paper2pod list`/`paper2pod show`.
 
 ### OpenLabs project briefs
 
@@ -152,6 +158,36 @@ render behind an optional `paper2pod[browser]` extra, exactly as sketched in
 the original request, kept as an optional dependency so the `run` command
 for local `.md` files keeps working without it installed.
 
+## Episode records
+
+Every successful `run` or `openlabs` episode is recorded as a row in a
+Supabase Postgres `episodes` table (schema in `supabase/schema.sql`, see the
+Quickstart step above): the full transcript text (CTA included), the
+title/authors/team, the transcript and TTS config actually used for that
+run, and where the audio landed in Storage. This makes past episodes
+browsable straight from the Supabase dashboard, and from the CLI:
+
+```bash
+paper2pod list
+paper2pod list --limit 5
+paper2pod show "Diffusion Models Beat GANs"
+paper2pod show 7ed1e5eb-20d6-4943-9fd7-5548f45e8bf4
+```
+
+`list` prints a table of recent episodes (created time, episode name,
+source type, duration), most recent first. `show` is the hand-testing entry
+point: it prints the full transcript text under `--- TRANSCRIPT ---`
+(copy-pasteable elsewhere, e.g. into a video tool) and the audio's URL under
+`--- AUDIO ---`. It accepts an episode id, an exact episode name, or a
+partial, case-insensitive name match (`"diffusion models"` finds the
+closest episode by that substring).
+
+Recording an episode is best-effort and never blocks a successful pipeline
+run: if the Supabase write fails right after the audio uploads (network
+blip, table missing, etc.), the run still exits 0, prints the audio URL
+it already has, and logs the failure -- nothing is lost, just not indexed
+for browsing.
+
 ## Troubleshooting
 
 - **401 / authentication errors:** the CLI fails immediately (no retries)
@@ -172,6 +208,17 @@ for local `.md` files keeps working without it installed.
   (404, "Project not found") or the project genuinely has too little
   content to narrate ("insufficient content"). Try `--no-cache` if you
   suspect a stale cached fetch is the problem.
+- **"Episode record failed" after a successful upload:** the audio is safe
+  (the URL printed right above is real); only the browsable record in the
+  `episodes` table failed to write. Check that `supabase/schema.sql` has
+  actually been run in your project's SQL Editor -- a missing table is the
+  most common cause.
+- **`list`/`show` exit 2:** these two commands only need
+  `SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY`, not a transcript provider key;
+  the error names whichever of the two is missing.
+- **`show` exits 1 with "No episode found matching":** the id/exact
+  name/partial name didn't match anything recorded. Run `paper2pod list`
+  to see what's actually there.
 - All errors are also written with full context to `logs/paper2pod.log`
   (rotated at 5 MB, 3 files kept); the console only shows warnings and
   above.
@@ -264,3 +311,31 @@ Choices made where the spec was silent:
   entry win unconditionally, silently overriding a plain `--model` flag,
   `PAPER2POD_TRANSCRIPT__MODEL`, or a hand-edited flat `transcript.model` any
   time its provider happened to already have a code-level default.
+- **Episode records use Supabase Postgres, not a local SQLite file**:
+  Supabase already holds the audio and `supabase-py` is already a
+  dependency, so this makes records browsable straight from the Supabase
+  dashboard without any extra tooling -- useful for exactly the hand-testing
+  workflow `show` exists for.
+- **No new `storage.public` config flag** for `audio_public_url`:
+  `storage.py` already detects bucket visibility dynamically per-upload
+  (`client.storage.get_bucket(bucket).public`); `upload()` now returns that
+  bit directly via `UploadResult` instead of duplicating the check behind a
+  second, config-level source of truth that could drift from the bucket's
+  actual setting.
+- **`episode_name` is derived from the actual uploaded object path**
+  (`Path(upload_result.object_path).stem`), not the pre-upload requested
+  name, so it's always the real filename stem even when a " (2)"-style
+  collision suffix was appended during upload.
+- **`authors_or_team` reuses `storage.format_authors()`**, the same
+  first-3-plus-"et al." truncation already used in the audio filename,
+  rather than a separate full join -- keeps the record's byline consistent
+  with what's actually in the filename rather than a second, longer value.
+- **`list`/`show` failures exit 1**, not a new dedicated exit code: they're
+  read-only commands outside the stage-based pipeline (0/2/3/4/5/6/7), and
+  `RecordError` deliberately has no pipeline exit code of its own (a record
+  failure must never fail an otherwise-successful `run`/`openlabs`).
+- **This is unrelated to a separate, not-yet-built HTTP API feature** (with
+  its own ephemeral `jobs.db` for request/job status). `db.py`'s functions
+  take an explicit `client` + typed values with no CLI-specific coupling,
+  specifically so that future feature can call `record_episode()` directly
+  once it exists -- but nothing here depends on or references it.

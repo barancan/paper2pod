@@ -238,3 +238,11 @@ def validate_secrets(secrets: Secrets, app_config: AppConfig, dry_run: bool = Fa
         raise _missing_var_error("SUPABASE_URL")
     if not secrets.supabase_service_role_key:
         raise _missing_var_error("SUPABASE_SERVICE_ROLE_KEY")
+
+
+def validate_supabase_secrets(secrets: Secrets) -> None:
+    """Fail fast for commands that only need Supabase connectivity (list, show)."""
+    if not secrets.supabase_url:
+        raise _missing_var_error("SUPABASE_URL")
+    if not secrets.supabase_service_role_key:
+        raise _missing_var_error("SUPABASE_SERVICE_ROLE_KEY")
