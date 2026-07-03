@@ -3,6 +3,7 @@ logs/
 *.mp3
 cache/
 .venv/
+.venv-arm64/
 __pycache__/
 *.pyc
 .pytest_cache/
