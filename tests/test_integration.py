@@ -32,7 +32,7 @@ class FakeTTSProvider:
 
 
 def _fake_generate(
-    paper_text, metadata, style_config, secrets=None, call_fn=None, cta_config=None
+    paper_text, metadata, style_config, secrets=None, call_fn=None, cta_config=None, style="paper"
 ):
     return Transcript(
         text=FAKE_TRANSCRIPT_TEXT.strip(),

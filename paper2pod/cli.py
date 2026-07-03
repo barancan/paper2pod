@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import tempfile
 import time
 from pathlib import Path
@@ -12,7 +13,9 @@ from rich.console import Console
 
 from paper2pod.config import (
     CTA_WARN_WORDS,
+    AppConfig,
     ConfigError,
+    Secrets,
     cta_word_count,
     load_config,
     load_secrets,
@@ -20,12 +23,14 @@ from paper2pod.config import (
 )
 from paper2pod.logging_setup import (
     ParseError,
+    SourceError,
     StorageError,
     TranscriptError,
     TTSError,
     setup_logging,
 )
-from paper2pod.parser import parse_markdown
+from paper2pod.parser import PaperMetadata, parse_markdown
+from paper2pod.sources.openlabs import fetch_project
 from paper2pod.storage import build_object_name
 from paper2pod.storage import upload as upload_recording
 from paper2pod.transcript import generate as generate_transcript
@@ -53,29 +58,20 @@ def _format_duration(total_seconds: float) -> str:
     return f"{minutes}m {seconds}s"
 
 
-@app.command()
-def run(
-    file: Annotated[Path, typer.Argument(help="Path to the paper .md file")],
-    config: Annotated[Path, typer.Option("--config", help="Path to config.yaml")] = Path(
-        "config.yaml"
-    ),
-    voice: Annotated[str | None, typer.Option("--voice", help="Override tts.voice")] = None,
-    model: Annotated[
-        str | None, typer.Option("--model", help="Override transcript.model")
-    ] = None,
-    dry_run: Annotated[
-        bool, typer.Option("--dry-run", help="Stop after transcript generation")
-    ] = False,
-) -> None:
-    """Convert a paper .md file into a narrated, uploaded audio recording."""
-    cli_overrides: dict[str, dict[str, str]] = {}
+def _cli_overrides(voice: str | None, model: str | None) -> dict[str, dict[str, str]]:
+    overrides: dict[str, dict[str, str]] = {}
     if voice:
-        cli_overrides["tts"] = {"voice": voice}
+        overrides["tts"] = {"voice": voice}
     if model:
-        cli_overrides["transcript"] = {"model": model}
+        overrides["transcript"] = {"model": model}
+    return overrides
 
+
+def _load_and_validate_config(
+    config: Path, voice: str | None, model: str | None, dry_run: bool
+) -> tuple[AppConfig, Secrets]:
     try:
-        app_config = load_config(config_path=config, cli_overrides=cli_overrides)
+        app_config = load_config(config_path=config, cli_overrides=_cli_overrides(voice, model))
         secrets = load_secrets()
         validate_secrets(secrets, app_config, dry_run=dry_run)
     except ConfigError as e:
@@ -89,7 +85,10 @@ def run(
                 f"[yellow]Warning:[/] cta.text is {cta_words} words; "
                 "long CTAs add to the spoken runtime."
             )
+    return app_config, secrets
 
+
+def _setup_logger(app_config: AppConfig, secrets: Secrets) -> logging.Logger:
     secret_values = [
         v
         for v in (
@@ -100,39 +99,32 @@ def run(
         )
         if v
     ]
-    logger = setup_logging(
+    return setup_logging(
         log_file=app_config.logging.file, level=app_config.logging.level, secrets=secret_values
     )
 
-    # Stage 1: Parse
-    t0 = time.monotonic()
-    try:
-        with console.status(f"Parsing {file.name}..."):
-            metadata, body = parse_markdown(
-                file,
-                max_input_tokens=app_config.transcript.max_input_tokens,
-                provider=app_config.transcript.provider,
-                model=app_config.transcript.model,
-                secrets=secrets,
-            )
-    except ParseError as e:
-        logger.error(str(e))
-        console.print(f"[bold red]✘ Parse failed:[/] {e}")
-        raise typer.Exit(EXIT_PARSE_ERROR) from e
-    elapsed = time.monotonic() - t0
-    author_count = len(metadata.authors)
-    author_word = "author" if author_count == 1 else "authors"
-    console.print(
-        f'✔ Parsed {file.name} (title: "{metadata.title}", {author_count} {author_word})'
-        f"   {elapsed:.1f}s"
-    )
 
-    # Stage 2: Transcript generation
+def _generate_and_publish(
+    metadata: PaperMetadata,
+    body_text: str,
+    style: str,
+    app_config: AppConfig,
+    secrets: Secrets,
+    dry_run: bool,
+    logger: logging.Logger,
+) -> None:
+    """Shared transcript -> CTA -> TTS -> upload pipeline for run and openlabs."""
+    # Transcript generation
     t0 = time.monotonic()
     try:
         with console.status("Generating transcript..."):
             transcript = generate_transcript(
-                body, metadata, app_config.transcript, secrets=secrets, cta_config=app_config.cta
+                body_text,
+                metadata,
+                app_config.transcript,
+                secrets=secrets,
+                cta_config=app_config.cta,
+                style=style,
             )
     except TranscriptError as e:
         logger.error(str(e))
@@ -149,7 +141,7 @@ def run(
         console.print(transcript.text)
         raise typer.Exit(EXIT_OK)
 
-    # Stage 3: TTS synthesis
+    # TTS synthesis
     t0 = time.monotonic()
     out_path = Path(tempfile.mkdtemp(prefix="paper2pod-")) / build_object_name(
         metadata.title, metadata.authors
@@ -170,7 +162,7 @@ def run(
         f"   {elapsed:.1f}s"
     )
 
-    # Stage 4: Upload to Supabase Storage
+    # Upload to Supabase Storage
     t0 = time.monotonic()
     try:
         with console.status(f"Uploading to bucket '{app_config.storage.bucket}'..."):
@@ -195,6 +187,99 @@ def run(
 
     out_path.unlink(missing_ok=True)
     raise typer.Exit(EXIT_OK)
+
+
+@app.command()
+def run(
+    file: Annotated[Path, typer.Argument(help="Path to the paper .md file")],
+    config: Annotated[Path, typer.Option("--config", help="Path to config.yaml")] = Path(
+        "config.yaml"
+    ),
+    voice: Annotated[str | None, typer.Option("--voice", help="Override tts.voice")] = None,
+    model: Annotated[
+        str | None, typer.Option("--model", help="Override transcript.model")
+    ] = None,
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Stop after transcript generation")
+    ] = False,
+) -> None:
+    """Convert a paper .md file into a narrated, uploaded audio recording."""
+    app_config, secrets = _load_and_validate_config(config, voice, model, dry_run)
+    logger = _setup_logger(app_config, secrets)
+
+    # Source stage: parse the md file
+    t0 = time.monotonic()
+    try:
+        with console.status(f"Parsing {file.name}..."):
+            metadata, body = parse_markdown(
+                file,
+                max_input_tokens=app_config.transcript.max_input_tokens,
+                provider=app_config.transcript.provider,
+                model=app_config.transcript.model,
+                secrets=secrets,
+            )
+    except ParseError as e:
+        logger.error(str(e))
+        console.print(f"[bold red]✘ Parse failed:[/] {e}")
+        raise typer.Exit(EXIT_PARSE_ERROR) from e
+    elapsed = time.monotonic() - t0
+    author_count = len(metadata.authors)
+    author_word = "author" if author_count == 1 else "authors"
+    console.print(
+        f'✔ Parsed {file.name} (title: "{metadata.title}", {author_count} {author_word})'
+        f"   {elapsed:.1f}s"
+    )
+
+    _generate_and_publish(metadata, body, "paper", app_config, secrets, dry_run, logger)
+
+
+@app.command()
+def openlabs(
+    project_url: Annotated[str, typer.Argument(help="OpenLabs project URL")],
+    config: Annotated[Path, typer.Option("--config", help="Path to config.yaml")] = Path(
+        "config.yaml"
+    ),
+    voice: Annotated[str | None, typer.Option("--voice", help="Override tts.voice")] = None,
+    model: Annotated[
+        str | None, typer.Option("--model", help="Override transcript.model")
+    ] = None,
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Stop after transcript generation")
+    ] = False,
+    no_cache: Annotated[
+        bool, typer.Option("--no-cache", help="Bypass the local OpenLabs fetch cache")
+    ] = False,
+) -> None:
+    """Fetch an OpenLabs project and publish a narrated, uploaded audio brief."""
+    app_config, secrets = _load_and_validate_config(config, voice, model, dry_run)
+    logger = _setup_logger(app_config, secrets)
+
+    # Source stage: fetch the OpenLabs project
+    t0 = time.monotonic()
+    try:
+        with console.status("Fetching OpenLabs project..."):
+            project = fetch_project(
+                project_url,
+                base_url=app_config.openlabs.base_url,
+                min_content_words=app_config.openlabs.min_content_words,
+                cache_ttl_hours=app_config.openlabs.cache_ttl_hours,
+                use_cache=not no_cache,
+            )
+    except SourceError as e:
+        logger.error(str(e))
+        console.print(f"[bold red]✘ Fetch failed:[/] {e}")
+        raise typer.Exit(EXIT_SOURCE_ERROR) from e
+    elapsed = time.monotonic() - t0
+    word_count = len(project.body_text.split())
+    console.print(
+        f'✔ Fetched OpenLabs project (title: "{project.title}", {word_count:,} words)'
+        f"   {elapsed:.1f}s"
+    )
+
+    metadata = PaperMetadata(title=project.title, authors=project.team_or_authors)
+    _generate_and_publish(
+        metadata, project.body_text, "project_brief", app_config, secrets, dry_run, logger
+    )
 
 
 if __name__ == "__main__":
