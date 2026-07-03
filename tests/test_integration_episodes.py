@@ -14,6 +14,7 @@ import pytest
 from typer.testing import CliRunner
 
 from paper2pod import cli as cli_module
+from paper2pod import pipeline as pipeline_module
 from paper2pod.config import Secrets, load_config
 from paper2pod.db import EpisodeRecord
 from paper2pod.logging_setup import RecordError
@@ -77,8 +78,10 @@ def _setup_common_mocks(monkeypatch, is_public=True):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     monkeypatch.setenv("SUPABASE_URL", "https://fake.supabase.co")
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "sk-service-test")
-    monkeypatch.setattr(cli_module, "generate_transcript", _fake_generate)
-    monkeypatch.setattr(cli_module, "get_provider", lambda tts_config, secrets: FakeTTSProvider())
+    monkeypatch.setattr(pipeline_module, "generate_transcript", _fake_generate)
+    monkeypatch.setattr(
+        pipeline_module, "get_provider", lambda tts_config, secrets: FakeTTSProvider()
+    )
     fake_client = object()
     monkeypatch.setattr("supabase.create_client", lambda url, key: fake_client)
 
@@ -89,7 +92,7 @@ def _setup_common_mocks(monkeypatch, is_public=True):
             is_public=is_public,
         )
 
-    monkeypatch.setattr(cli_module, "upload_recording", fake_upload)
+    monkeypatch.setattr(pipeline_module, "upload_recording", fake_upload)
     return fake_client
 
 
@@ -101,7 +104,7 @@ def test_run_records_episode_once_after_upload_with_correct_fields(monkeypatch):
         calls.append((client, record))
         return "new-episode-id"
 
-    monkeypatch.setattr(cli_module, "record_episode", fake_record_episode)
+    monkeypatch.setattr(pipeline_module, "record_episode", fake_record_episode)
 
     result = runner.invoke(cli_module.app, ["run", str(FIXTURES / "frontmatter.md")])
 
@@ -152,8 +155,8 @@ def test_record_episode_called_after_upload_mock(monkeypatch):
         call_order.append("record")
         return "id"
 
-    monkeypatch.setattr(cli_module, "upload_recording", fake_upload)
-    monkeypatch.setattr(cli_module, "record_episode", fake_record_episode)
+    monkeypatch.setattr(pipeline_module, "upload_recording", fake_upload)
+    monkeypatch.setattr(pipeline_module, "record_episode", fake_record_episode)
 
     result = runner.invoke(cli_module.app, ["run", str(FIXTURES / "frontmatter.md")])
 
@@ -165,7 +168,7 @@ def test_audio_public_url_none_when_bucket_private(monkeypatch):
     _setup_common_mocks(monkeypatch, is_public=False)
     calls = []
     monkeypatch.setattr(
-        cli_module, "record_episode", lambda client, record: calls.append(record) or "id"
+        pipeline_module, "record_episode", lambda client, record: calls.append(record) or "id"
     )
 
     result = runner.invoke(cli_module.app, ["run", str(FIXTURES / "frontmatter.md")])
@@ -176,14 +179,14 @@ def test_audio_public_url_none_when_bucket_private(monkeypatch):
 
 def test_openlabs_records_episode_with_source_type_openlabs(monkeypatch):
     fake_client = _setup_common_mocks(monkeypatch, is_public=True)
-    monkeypatch.setattr(cli_module, "fetch_project", lambda url, **kwargs: _fake_project())
+    monkeypatch.setattr(pipeline_module, "fetch_project", lambda url, **kwargs: _fake_project())
     calls = []
 
     def fake_record_episode(client, record):
         calls.append((client, record))
         return "id"
 
-    monkeypatch.setattr(cli_module, "record_episode", fake_record_episode)
+    monkeypatch.setattr(pipeline_module, "record_episode", fake_record_episode)
 
     result = runner.invoke(cli_module.app, ["openlabs", PROJECT_URL])
 
@@ -202,7 +205,7 @@ def test_record_episode_failure_does_not_fail_pipeline_and_prints_audio_url(monk
     def failing_record_episode(client, record):
         raise RecordError("Supabase unreachable")
 
-    monkeypatch.setattr(cli_module, "record_episode", failing_record_episode)
+    monkeypatch.setattr(pipeline_module, "record_episode", failing_record_episode)
 
     result = runner.invoke(cli_module.app, ["run", str(FIXTURES / "frontmatter.md")])
 
@@ -215,10 +218,10 @@ def test_record_episode_failure_does_not_fail_pipeline_and_prints_audio_url(monk
 
 def test_dry_run_never_calls_record_episode(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
-    monkeypatch.setattr(cli_module, "generate_transcript", _fake_generate)
+    monkeypatch.setattr(pipeline_module, "generate_transcript", _fake_generate)
     calls = []
     monkeypatch.setattr(
-        cli_module, "record_episode", lambda client, record: calls.append(record) or "id"
+        pipeline_module, "record_episode", lambda client, record: calls.append(record) or "id"
     )
 
     result = runner.invoke(

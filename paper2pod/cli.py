@@ -1,10 +1,8 @@
-"""Typer entrypoint: orchestrates parse -> transcript -> TTS -> upload with Rich progress."""
+"""Typer entrypoint: CLI commands driving the shared pipeline, with Rich progress."""
 
 from __future__ import annotations
 
 import logging
-import tempfile
-import time
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -23,7 +21,7 @@ from paper2pod.config import (
     validate_secrets,
     validate_supabase_secrets,
 )
-from paper2pod.db import EpisodeRecord, get_episode, list_episodes, record_episode
+from paper2pod.db import get_episode, list_episodes
 from paper2pod.logging_setup import (
     ParseError,
     RecordError,
@@ -33,13 +31,13 @@ from paper2pod.logging_setup import (
     TTSError,
     setup_logging,
 )
-from paper2pod.parser import PaperMetadata, parse_markdown
-from paper2pod.sources.openlabs import fetch_project
-from paper2pod.storage import build_object_name, format_authors
+from paper2pod.pipeline import (
+    StageEvent,
+    format_duration,
+    run_markdown_pipeline,
+    run_openlabs_pipeline,
+)
 from paper2pod.storage import resolve_url as resolve_audio_url
-from paper2pod.storage import upload as upload_recording
-from paper2pod.transcript import generate as generate_transcript
-from paper2pod.tts import get_provider
 
 EXIT_COMMAND_FAILED = 1
 
@@ -58,11 +56,6 @@ EXIT_TRANSCRIPT_ERROR = 4
 EXIT_TTS_ERROR = 5
 EXIT_STORAGE_ERROR = 6
 EXIT_SOURCE_ERROR = 7
-
-
-def _format_duration(total_seconds: float) -> str:
-    minutes, seconds = divmod(int(round(total_seconds)), 60)
-    return f"{minutes}m {seconds}s"
 
 
 def _cli_overrides(voice: str | None, model: str | None) -> dict[str, dict[str, str]]:
@@ -128,122 +121,30 @@ def _connect_supabase(config_path: Path) -> tuple[Any, logging.Logger]:
     return client, logger
 
 
-def _generate_and_publish(
-    metadata: PaperMetadata,
-    body_text: str,
-    style: str,
-    app_config: AppConfig,
-    secrets: Secrets,
-    dry_run: bool,
-    logger: logging.Logger,
-    source_type: str,
-    source_reference: str,
-) -> None:
-    """Shared transcript -> CTA -> TTS -> upload -> record pipeline for run and openlabs."""
-    # Transcript generation
-    t0 = time.monotonic()
-    try:
-        with console.status("Generating transcript..."):
-            transcript = generate_transcript(
-                body_text,
-                metadata,
-                app_config.transcript,
-                secrets=secrets,
-                cta_config=app_config.cta,
-                style=style,
-            )
-    except TranscriptError as e:
-        logger.error(str(e))
-        console.print(f"[bold red]✘ Transcript generation failed:[/] {e}")
-        raise typer.Exit(EXIT_TRANSCRIPT_ERROR) from e
-    elapsed = time.monotonic() - t0
-    console.print(
-        f"✔ Transcript generated ({transcript.word_count} words, "
-        f"~{_format_duration(transcript.estimated_duration_s)})   {elapsed:.1f}s"
-    )
+class RichPipelineListener:
+    """Renders pipeline StageEvents via Rich, reproducing the CLI's exact output."""
 
-    if dry_run:
-        console.print()
-        console.print(transcript.text)
-        raise typer.Exit(EXIT_OK)
+    def __init__(self, console: Console, logger: logging.Logger):
+        self.console = console
+        self.logger = logger
+        self._status: Any = None
 
-    # TTS synthesis
-    t0 = time.monotonic()
-    out_path = Path(tempfile.mkdtemp(prefix="paper2pod-")) / build_object_name(
-        metadata.title, metadata.authors
-    )
-    try:
-        with console.status(
-            f"Synthesizing audio ({app_config.tts.provider}-tts, {app_config.tts.voice})..."
-        ):
-            tts_provider = get_provider(app_config.tts, secrets)
-            tts_provider.synthesize(transcript.text, out_path)
-    except TTSError as e:
-        logger.error(str(e))
-        console.print(f"[bold red]✘ TTS synthesis failed:[/] {e}")
-        raise typer.Exit(EXIT_TTS_ERROR) from e
-    elapsed = time.monotonic() - t0
-    console.print(
-        f"✔ Synthesized audio ({app_config.tts.provider}-tts, {app_config.tts.voice})"
-        f"   {elapsed:.1f}s"
-    )
+    def __call__(self, event: StageEvent) -> None:
+        if event.status == "started":
+            self._status = self.console.status(event.message)
+            self._status.__enter__()
+        elif event.status == "completed":
+            self._exit_status()
+            self.console.print(event.message)
+        elif event.status == "failed":
+            self._exit_status()
+            self.logger.error(event.data.get("error", event.message))
+            self.console.print(event.message)
 
-    # Upload to Supabase Storage
-    t0 = time.monotonic()
-    try:
-        with console.status(f"Uploading to bucket '{app_config.storage.bucket}'..."):
-            from supabase import create_client
-
-            client = create_client(secrets.supabase_url, secrets.supabase_service_role_key)
-            object_name = build_object_name(metadata.title, metadata.authors)
-            upload_result = upload_recording(
-                client,
-                app_config.storage.bucket,
-                object_name,
-                out_path,
-                upsert=app_config.storage.upsert,
-            )
-    except StorageError as e:
-        logger.error(str(e))
-        console.print(f"[bold red]✘ Upload failed:[/] {e}")
-        raise typer.Exit(EXIT_STORAGE_ERROR) from e
-    elapsed = time.monotonic() - t0
-    console.print(f"✔ Uploaded to '{app_config.storage.bucket}'   {elapsed:.1f}s")
-    console.print(upload_result.url)
-
-    # Record the episode (best-effort: must never fail an otherwise-successful run)
-    t0 = time.monotonic()
-    record = EpisodeRecord(
-        episode_name=Path(upload_result.object_path).stem,
-        source_type=source_type,
-        source_reference=source_reference,
-        title=metadata.title,
-        authors_or_team=format_authors(metadata.authors),
-        transcript_text=transcript.text,
-        cta_text=app_config.cta.text if app_config.cta.enabled else None,
-        word_count=transcript.word_count,
-        estimated_duration_seconds=int(round(transcript.estimated_duration_s)),
-        transcript_provider=app_config.transcript.provider,
-        transcript_model=app_config.transcript.model,
-        tts_voice=app_config.tts.voice,
-        audio_bucket=app_config.storage.bucket,
-        audio_object_path=upload_result.object_path,
-        audio_public_url=upload_result.url if upload_result.is_public else None,
-    )
-    try:
-        with console.status("Recording episode..."):
-            episode_id = record_episode(client, record)
-        elapsed = time.monotonic() - t0
-        console.print(f"✔ Episode recorded (id: {episode_id})   {elapsed:.1f}s")
-    except RecordError as e:
-        logger.error(str(e))
-        console.print(
-            f"[yellow]⚠ Episode record failed:[/] {e}\n"
-            f"The audio uploaded successfully; nothing was lost. URL: {upload_result.url}"
-        )
-
-    out_path.unlink(missing_ok=True)
-    raise typer.Exit(EXIT_OK)
+    def _exit_status(self) -> None:
+        if self._status is not None:
+            self._status.__exit__(None, None, None)
+            self._status = None
 
 
 @app.command()
@@ -263,41 +164,25 @@ def run(
     """Convert a paper .md file into a narrated, uploaded audio recording."""
     app_config, secrets = _load_and_validate_config(config, voice, model, dry_run)
     logger = _setup_logger(app_config, secrets)
+    listener = RichPipelineListener(console, logger)
 
-    # Source stage: parse the md file
-    t0 = time.monotonic()
     try:
-        with console.status(f"Parsing {file.name}..."):
-            metadata, body = parse_markdown(
-                file,
-                max_input_tokens=app_config.transcript.max_input_tokens,
-                provider=app_config.transcript.provider,
-                model=app_config.transcript.model,
-                secrets=secrets,
-            )
+        result = run_markdown_pipeline(
+            file, app_config, secrets, listener, dry_run=dry_run, source_reference=str(file)
+        )
     except ParseError as e:
-        logger.error(str(e))
-        console.print(f"[bold red]✘ Parse failed:[/] {e}")
         raise typer.Exit(EXIT_PARSE_ERROR) from e
-    elapsed = time.monotonic() - t0
-    author_count = len(metadata.authors)
-    author_word = "author" if author_count == 1 else "authors"
-    console.print(
-        f'✔ Parsed {file.name} (title: "{metadata.title}", {author_count} {author_word})'
-        f"   {elapsed:.1f}s"
-    )
+    except TranscriptError as e:
+        raise typer.Exit(EXIT_TRANSCRIPT_ERROR) from e
+    except TTSError as e:
+        raise typer.Exit(EXIT_TTS_ERROR) from e
+    except StorageError as e:
+        raise typer.Exit(EXIT_STORAGE_ERROR) from e
 
-    _generate_and_publish(
-        metadata,
-        body,
-        "paper",
-        app_config,
-        secrets,
-        dry_run,
-        logger,
-        source_type="markdown",
-        source_reference=str(file),
-    )
+    if dry_run:
+        console.print()
+        console.print(result.transcript.text)
+    raise typer.Exit(EXIT_OK)
 
 
 @app.command()
@@ -320,41 +205,25 @@ def openlabs(
     """Fetch an OpenLabs project and publish a narrated, uploaded audio brief."""
     app_config, secrets = _load_and_validate_config(config, voice, model, dry_run)
     logger = _setup_logger(app_config, secrets)
+    listener = RichPipelineListener(console, logger)
 
-    # Source stage: fetch the OpenLabs project
-    t0 = time.monotonic()
     try:
-        with console.status("Fetching OpenLabs project..."):
-            project = fetch_project(
-                project_url,
-                base_url=app_config.openlabs.base_url,
-                min_content_words=app_config.openlabs.min_content_words,
-                cache_ttl_hours=app_config.openlabs.cache_ttl_hours,
-                use_cache=not no_cache,
-            )
+        result = run_openlabs_pipeline(
+            project_url, app_config, secrets, listener, dry_run=dry_run, no_cache=no_cache
+        )
     except SourceError as e:
-        logger.error(str(e))
-        console.print(f"[bold red]✘ Fetch failed:[/] {e}")
         raise typer.Exit(EXIT_SOURCE_ERROR) from e
-    elapsed = time.monotonic() - t0
-    word_count = len(project.body_text.split())
-    console.print(
-        f'✔ Fetched OpenLabs project (title: "{project.title}", {word_count:,} words)'
-        f"   {elapsed:.1f}s"
-    )
+    except TranscriptError as e:
+        raise typer.Exit(EXIT_TRANSCRIPT_ERROR) from e
+    except TTSError as e:
+        raise typer.Exit(EXIT_TTS_ERROR) from e
+    except StorageError as e:
+        raise typer.Exit(EXIT_STORAGE_ERROR) from e
 
-    metadata = PaperMetadata(title=project.title, authors=project.team_or_authors)
-    _generate_and_publish(
-        metadata,
-        project.body_text,
-        "project_brief",
-        app_config,
-        secrets,
-        dry_run,
-        logger,
-        source_type="openlabs",
-        source_reference=project_url,
-    )
+    if dry_run:
+        console.print()
+        console.print(result.transcript.text)
+    raise typer.Exit(EXIT_OK)
 
 
 @app.command(name="list")
@@ -387,7 +256,7 @@ def list_command(
             created,
             episode.episode_name,
             episode.source_type,
-            _format_duration(episode.estimated_duration_seconds),
+            format_duration(episode.estimated_duration_seconds),
         )
     console.print(table)
     raise typer.Exit(EXIT_OK)

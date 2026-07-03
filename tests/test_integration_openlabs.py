@@ -8,6 +8,7 @@ import pytest
 from typer.testing import CliRunner
 
 from paper2pod import cli as cli_module
+from paper2pod import pipeline as pipeline_module
 from paper2pod.config import DEFAULT_CTA_TEXT, Secrets
 from paper2pod.logging_setup import SourceError
 from paper2pod.sources.openlabs import ProjectContent
@@ -78,8 +79,8 @@ def _clean_env(monkeypatch):
 
 def test_openlabs_dry_run_prints_fetch_stage_and_transcript(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
-    monkeypatch.setattr(cli_module, "fetch_project", lambda url, **kwargs: _fake_project())
-    monkeypatch.setattr(cli_module, "generate_transcript", _fake_generate)
+    monkeypatch.setattr(pipeline_module, "fetch_project", lambda url, **kwargs: _fake_project())
+    monkeypatch.setattr(pipeline_module, "generate_transcript", _fake_generate)
 
     result = runner.invoke(cli_module.app, ["openlabs", PROJECT_URL, "--dry-run"])
 
@@ -94,11 +95,11 @@ def test_openlabs_full_pipeline_uploads_title_team_filename(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     monkeypatch.setenv("SUPABASE_URL", "https://fake.supabase.co")
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "sk-service-test")
-    monkeypatch.setattr(cli_module, "fetch_project", lambda url, **kwargs: _fake_project())
-    monkeypatch.setattr(cli_module, "generate_transcript", _fake_generate)
+    monkeypatch.setattr(pipeline_module, "fetch_project", lambda url, **kwargs: _fake_project())
+    monkeypatch.setattr(pipeline_module, "generate_transcript", _fake_generate)
 
     fake_tts = FakeTTSProvider()
-    monkeypatch.setattr(cli_module, "get_provider", lambda tts_config, secrets: fake_tts)
+    monkeypatch.setattr(pipeline_module, "get_provider", lambda tts_config, secrets: fake_tts)
     monkeypatch.setattr("supabase.create_client", lambda url, key: object())
 
     upload_calls = []
@@ -112,7 +113,7 @@ def test_openlabs_full_pipeline_uploads_title_team_filename(monkeypatch):
             is_public=True,
         )
 
-    monkeypatch.setattr(cli_module, "upload_recording", fake_upload)
+    monkeypatch.setattr(pipeline_module, "upload_recording", fake_upload)
 
     result = runner.invoke(cli_module.app, ["openlabs", PROJECT_URL])
 
@@ -128,7 +129,7 @@ def test_openlabs_full_pipeline_uploads_title_team_filename(monkeypatch):
 def test_openlabs_dry_run_ends_with_default_cta_text(monkeypatch):
     """Exercises the real generate_transcript() to prove openlabs wires cta through."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
-    monkeypatch.setattr(cli_module, "fetch_project", lambda url, **kwargs: _fake_project())
+    monkeypatch.setattr(pipeline_module, "fetch_project", lambda url, **kwargs: _fake_project())
     monkeypatch.setattr("paper2pod.transcript._bind_provider_call", _fake_bind_provider_call)
 
     result = runner.invoke(cli_module.app, ["openlabs", PROJECT_URL, "--dry-run"])
@@ -140,7 +141,7 @@ def test_openlabs_dry_run_ends_with_default_cta_text(monkeypatch):
 
 def test_openlabs_dry_run_cta_disabled_via_config(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
-    monkeypatch.setattr(cli_module, "fetch_project", lambda url, **kwargs: _fake_project())
+    monkeypatch.setattr(pipeline_module, "fetch_project", lambda url, **kwargs: _fake_project())
     monkeypatch.setattr("paper2pod.transcript._bind_provider_call", _fake_bind_provider_call)
 
     config_path = tmp_path / "config.yaml"
@@ -157,7 +158,7 @@ def test_openlabs_dry_run_cta_disabled_via_config(tmp_path, monkeypatch):
 
 def test_openlabs_dry_run_custom_cta_text_verbatim(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
-    monkeypatch.setattr(cli_module, "fetch_project", lambda url, **kwargs: _fake_project())
+    monkeypatch.setattr(pipeline_module, "fetch_project", lambda url, **kwargs: _fake_project())
     monkeypatch.setattr("paper2pod.transcript._bind_provider_call", _fake_bind_provider_call)
 
     custom_cta = "Go explore OpenLabs right now and post your own research there."
@@ -177,14 +178,14 @@ def test_openlabs_full_run_synthesizes_text_ending_with_cta(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     monkeypatch.setenv("SUPABASE_URL", "https://fake.supabase.co")
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "sk-service-test")
-    monkeypatch.setattr(cli_module, "fetch_project", lambda url, **kwargs: _fake_project())
+    monkeypatch.setattr(pipeline_module, "fetch_project", lambda url, **kwargs: _fake_project())
     monkeypatch.setattr("paper2pod.transcript._bind_provider_call", _fake_bind_provider_call)
 
     fake_tts = FakeTTSProvider()
-    monkeypatch.setattr(cli_module, "get_provider", lambda tts_config, secrets: fake_tts)
+    monkeypatch.setattr(pipeline_module, "get_provider", lambda tts_config, secrets: fake_tts)
     monkeypatch.setattr("supabase.create_client", lambda url, key: object())
     monkeypatch.setattr(
-        cli_module,
+        pipeline_module,
         "upload_recording",
         lambda client, bucket, object_name, local_path, upsert=False: UploadResult(
             object_path=object_name, url="https://fake.supabase.co/x.mp3", is_public=True
@@ -207,7 +208,7 @@ def test_openlabs_fetch_failure_exits_7(monkeypatch):
     def failing_fetch(url, **kwargs):
         raise SourceError("OpenLabs project page has insufficient content", input_file=url)
 
-    monkeypatch.setattr(cli_module, "fetch_project", failing_fetch)
+    monkeypatch.setattr(pipeline_module, "fetch_project", failing_fetch)
 
     result = runner.invoke(cli_module.app, ["openlabs", PROJECT_URL])
     assert result.exit_code == 7
@@ -222,8 +223,8 @@ def test_no_cache_flag_passes_use_cache_false_to_fetch_project(monkeypatch):
         captured.update(kwargs)
         return _fake_project()
 
-    monkeypatch.setattr(cli_module, "fetch_project", fake_fetch)
-    monkeypatch.setattr(cli_module, "generate_transcript", _fake_generate)
+    monkeypatch.setattr(pipeline_module, "fetch_project", fake_fetch)
+    monkeypatch.setattr(pipeline_module, "generate_transcript", _fake_generate)
 
     result = runner.invoke(cli_module.app, ["openlabs", PROJECT_URL, "--no-cache", "--dry-run"])
 
