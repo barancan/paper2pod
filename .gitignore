@@ -1,6 +1,7 @@
 .env
 logs/
 *.mp3
+cache/
 .venv/
 __pycache__/
 *.pyc

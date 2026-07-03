@@ -1,12 +1,13 @@
 # paper2pod
 
-paper2pod is a Python CLI that turns a research paper (as a `.md` file) into
-an energetic, ear-friendly narration, renders it to a realistic AI voice
-recording, and uploads the result to Supabase Storage.
+paper2pod is a Python CLI that turns a research paper (as a `.md` file) or
+an OpenLabs project into an energetic narration, renders it to
+a realistic AI voice recording, and uploads the result to Supabase Storage.
 
-Pipeline: parse the paper, generate a narration transcript with an LLM,
-synthesize audio, upload it, done. One command, under 90 seconds on a
-typical laptop, network permitting.
+Pipeline: get the source content (parse a paper, or fetch an OpenLabs
+project), generate a narration transcript with an LLM, append a spoken call
+to action, synthesize audio, upload it, done. One command, under 90 seconds
+on a typical laptop, network permitting.
 
 ## Prerequisites
 
@@ -51,6 +52,20 @@ reference below). Never commit `.env`, it's already covered by
    ```
    On success this prints the public or signed URL of the uploaded MP3.
 
+### OpenLabs project briefs
+
+`paper2pod openlabs <project-url>` takes the same flags as `run` (plus
+`--no-cache`) and produces a spoken brief for an OpenLabs project instead of
+a paper:
+
+```bash
+paper2pod openlabs https://openlabs.bio.xyz/projects/<id> --dry-run
+paper2pod openlabs https://openlabs.bio.xyz/projects/<id>
+```
+
+Both commands share the same transcript/CTA/TTS/upload pipeline and produce
+files named the same way; only how the source content is obtained differs.
+
 ## Configuration reference
 
 Precedence, highest to lowest: CLI flags, then environment variables, then
@@ -59,19 +74,24 @@ at startup with the exact variable name.
 
 `config.yaml`:
 
-| Key | Default | Notes |
-|---|---|---|
-| `transcript.provider` | `anthropic` | `anthropic` or `openai` |
-| `transcript.model` | `claude-sonnet-4-6` | model string passed to the provider |
-| `transcript.max_input_tokens` | `12000` | paper body is truncated to roughly this many tokens |
-| `transcript.target_words` | `[320, 420]` | narration length target |
-| `tts.provider` | `edge` | `edge` (free) or `elevenlabs` (keyed) |
-| `tts.voice` | `en-US-GuyNeural` | edge-tts voice name, or an ElevenLabs voice ID when `tts.provider=elevenlabs` |
-| `tts.rate` | `+8%` | edge-tts speaking rate adjustment |
-| `storage.bucket` | `recordings` | Supabase Storage bucket name |
-| `storage.upsert` | `false` | overwrite on name collision instead of appending " (2)" |
-| `logging.level` | `INFO` | reserved, see Decisions |
-| `logging.file` | `logs/paper2pod.log` | rotating log file path |
+| Key                           | Default                    | Notes                                                                                                                                                   |
+| ----------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `transcript.provider`         | `anthropic`                | `anthropic` or `openai`                                                                                                                                 |
+| `transcript.model`            | `claude-sonnet-4-6`        | model string passed to the provider                                                                                                                     |
+| `transcript.max_input_tokens` | `12000`                    | paper body is truncated to roughly this many tokens                                                                                                     |
+| `transcript.target_words`     | `[320, 420]`               | narration length target                                                                                                                                 |
+| `tts.provider`                | `edge`                     | `edge` (free) or `elevenlabs` (keyed)                                                                                                                   |
+| `tts.voice`                   | `en-US-GuyNeural`          | edge-tts voice name, or an ElevenLabs voice ID when `tts.provider=elevenlabs`                                                                           |
+| `tts.rate`                    | `+8%`                      | edge-tts speaking rate adjustment                                                                                                                       |
+| `storage.bucket`              | `recordings`               | Supabase Storage bucket name                                                                                                                            |
+| `storage.upsert`              | `false`                    | overwrite on name collision instead of appending " (2)"                                                                                                 |
+| `logging.level`               | `INFO`                     | reserved, see Decisions                                                                                                                                 |
+| `logging.file`                | `logs/paper2pod.log`       | rotating log file path                                                                                                                                  |
+| `cta.enabled`                 | `true`                     | append a spoken call to action after every transcript                                                                                                   |
+| `cta.text`                    | see `config.yaml`          | the CTA text, spoken verbatim, never sent to the LLM. Non-empty and 80 words or fewer are enforced at startup; a console warning appears above 60 words |
+| `openlabs.base_url`           | `https://openlabs.bio.xyz` | the OpenLabs app URL; the API host is derived from it                                                                                                   |
+| `openlabs.cache_ttl_hours`    | `24`                       | how long a fetched project is cached before refetching                                                                                                  |
+| `openlabs.min_content_words`  | `200`                      | minimum usable content required, or the fetch fails                                                                                                     |
 
 Any of these can also be set as an environment variable using the pattern
 `PAPER2POD_<SECTION>__<KEY>`, for example `PAPER2POD_TTS__VOICE`. The CLI
@@ -79,13 +99,13 @@ flags `--config`, `--voice`, and `--model` override everything else.
 
 `.env` (secrets, never committed):
 
-| Variable | Required when |
-|---|---|
-| `ANTHROPIC_API_KEY` | `transcript.provider=anthropic` |
-| `OPENAI_API_KEY` | `transcript.provider=openai` |
-| `ELEVENLABS_API_KEY` | `tts.provider=elevenlabs` (skipped entirely on `--dry-run`) |
-| `SUPABASE_URL` | always, unless `--dry-run` |
-| `SUPABASE_SERVICE_ROLE_KEY` | always, unless `--dry-run` |
+| Variable                    | Required when                                               |
+| --------------------------- | ----------------------------------------------------------- |
+| `ANTHROPIC_API_KEY`         | `transcript.provider=anthropic`                             |
+| `OPENAI_API_KEY`            | `transcript.provider=openai`                                |
+| `ELEVENLABS_API_KEY`        | `tts.provider=elevenlabs` (skipped entirely on `--dry-run`) |
+| `SUPABASE_URL`              | always, unless `--dry-run`                                  |
+| `SUPABASE_SERVICE_ROLE_KEY` | always, unless `--dry-run`                                  |
 
 ## Switching providers
 
@@ -97,6 +117,27 @@ implement the same `generate()` interface, so no code changes are needed.
 `ELEVENLABS_API_KEY` in `.env`, and set `tts.voice` to an ElevenLabs voice
 ID. This is the documented fallback if edge-tts ever breaks (see
 Troubleshooting).
+
+## Fetching OpenLabs projects
+
+The OpenLabs app (`openlabs.bio.xyz`) is a client-rendered Next.js app: a
+plain GET on a project page returns no project data in the HTML. Rather than
+driving a headless browser, paper2pod calls the same public JSON API the
+app's own frontend calls, at `api.openlabs.bio.xyz` (no API key required).
+This was found by downloading the app's JS bundles and grepping them for API
+routes and the API host string. `sources/openlabs.py` fetches the project
+detail, its collaborators (for the byline), and its update posts (combined
+with the summary to reliably clear `openlabs.min_content_words`, since the
+summary alone is usually short), then caches the result at
+`cache/openlabs/{project_id}.json` for `openlabs.cache_ttl_hours`.
+
+This is unofficial and undocumented, like the OpenLabs frontend's use of it.
+**It depends entirely on OpenLabs' current API and page structure and may
+need maintenance if they change either.** If the API ever disappears, the
+next fallback (not currently implemented) would be a headless-browser
+render behind an optional `paper2pod[browser]` extra, exactly as sketched in
+the original request, kept as an optional dependency so the `run` command
+for local `.md` files keeps working without it installed.
 
 ## Troubleshooting
 
@@ -114,6 +155,10 @@ Troubleshooting).
 - **"Could not determine a title" parse error:** add a `title:` field to
   YAML frontmatter at the top of the file, or a `# Title` heading. See
   `tests/fixtures/` for examples.
+- **`openlabs` fetch fails (exit code 7):** either the project URL is wrong
+  (404, "Project not found") or the project genuinely has too little
+  content to narrate ("insufficient content"). Try `--no-cache` if you
+  suspect a stale cached fetch is the problem.
 - All errors are also written with full context to `logs/paper2pod.log`
   (rotated at 5 MB, 3 files kept); the console only shows warnings and
   above.
@@ -173,3 +218,29 @@ Choices made where the spec was silent:
 - **The Postman collection** covers only the REST-based external APIs
   (Anthropic, OpenAI, ElevenLabs, Supabase Storage); edge-tts, the default
   TTS provider, has no REST equivalent to document.
+- **The CTA's system-prompt instruction is static**, not conditional on
+  `cta.enabled`: the narrator is always asked to end on a natural closing
+  sentence rather than a catchphrase, whether or not a CTA actually follows.
+  A single prompt is simpler than branching prompt text per config, and a
+  natural closing sentence reads fine either way.
+- **`cta.text` is stripped once**, in the config model, so every downstream
+  comparison (including "byte-equal to config" in tests) is exact without
+  repeated `.strip()` calls at each use site.
+- **`ProjectContent.team_or_authors` is `list[str]`**, not a bare string,
+  specifically so it's a drop-in replacement for `PaperMetadata.authors`.
+  That's what lets the `openlabs` command reuse `build_object_name()` and
+  the shared publish pipeline completely unchanged.
+- **The OpenLabs API host is derived, not configured separately**: swapping
+  `openlabs.bio.xyz` for `api.openlabs.bio.xyz` in `_derive_api_base()`
+  keeps `openlabs.base_url` as the one user-facing value to change (e.g. for
+  a staging environment) rather than needing two URLs kept in sync.
+- **Collaborators and update posts are best-effort**, not fatal, on fetch
+  failure: only the primary project-detail call blocks the pipeline.
+  Missing collaborators fall back to the project creator, then to
+  `"OpenLabs"`; missing updates just leave `body_text` as the summary alone
+  (which may then legitimately trip the `min_content_words` check).
+- **The OpenLabs cache key is the project's UUID**, not a human-readable
+  slug, since that's what OpenLabs project URLs actually contain.
+- **`Paper2PodError`'s `__str__` suffix changed from `(file: ...)` to
+  `(input: ...)`**, since `input_file` now also carries a URL for
+  `SourceError`; no code or test depended on the old literal wording.
