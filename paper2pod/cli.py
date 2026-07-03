@@ -6,10 +6,11 @@ import logging
 import tempfile
 import time
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
 from rich.console import Console
+from rich.table import Table
 
 from paper2pod.config import (
     CTA_WARN_WORDS,
@@ -20,8 +21,9 @@ from paper2pod.config import (
     load_config,
     load_secrets,
     validate_secrets,
+    validate_supabase_secrets,
 )
-from paper2pod.db import EpisodeRecord, record_episode
+from paper2pod.db import EpisodeRecord, get_episode, list_episodes, record_episode
 from paper2pod.logging_setup import (
     ParseError,
     RecordError,
@@ -34,9 +36,12 @@ from paper2pod.logging_setup import (
 from paper2pod.parser import PaperMetadata, parse_markdown
 from paper2pod.sources.openlabs import fetch_project
 from paper2pod.storage import build_object_name, format_authors
+from paper2pod.storage import resolve_url as resolve_audio_url
 from paper2pod.storage import upload as upload_recording
 from paper2pod.transcript import generate as generate_transcript
 from paper2pod.tts import get_provider
+
+EXIT_COMMAND_FAILED = 1
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
 console = Console()
@@ -104,6 +109,23 @@ def _setup_logger(app_config: AppConfig, secrets: Secrets) -> logging.Logger:
     return setup_logging(
         log_file=app_config.logging.file, level=app_config.logging.level, secrets=secret_values
     )
+
+
+def _connect_supabase(config_path: Path) -> tuple[Any, logging.Logger]:
+    """Minimal setup for read-only commands that only need Supabase (list, show)."""
+    try:
+        app_config = load_config(config_path=config_path)
+        secrets = load_secrets()
+        validate_supabase_secrets(secrets)
+    except ConfigError as e:
+        console.print(f"[bold red]Config error:[/] {e}")
+        raise typer.Exit(EXIT_CONFIG_ERROR) from e
+
+    logger = _setup_logger(app_config, secrets)
+    from supabase import create_client
+
+    client = create_client(secrets.supabase_url, secrets.supabase_service_role_key)
+    return client, logger
 
 
 def _generate_and_publish(
@@ -333,6 +355,82 @@ def openlabs(
         source_type="openlabs",
         source_reference=project_url,
     )
+
+
+@app.command(name="list")
+def list_command(
+    limit: Annotated[int, typer.Option("--limit", help="Max episodes to show")] = 20,
+    config: Annotated[Path, typer.Option("--config", help="Path to config.yaml")] = Path(
+        "config.yaml"
+    ),
+) -> None:
+    """List recorded episodes, most recent first."""
+    client, _logger = _connect_supabase(config)
+    try:
+        episodes = list_episodes(client, limit=limit)
+    except RecordError as e:
+        console.print(f"[bold red]Failed to list episodes:[/] {e}")
+        raise typer.Exit(EXIT_COMMAND_FAILED) from e
+
+    if not episodes:
+        console.print("No episodes recorded yet.")
+        raise typer.Exit(EXIT_OK)
+
+    table = Table()
+    table.add_column("Created")
+    table.add_column("Episode")
+    table.add_column("Source")
+    table.add_column("Duration")
+    for episode in episodes:
+        created = (episode.created_at or "")[:19].replace("T", " ")
+        table.add_row(
+            created,
+            episode.episode_name,
+            episode.source_type,
+            _format_duration(episode.estimated_duration_seconds),
+        )
+    console.print(table)
+    raise typer.Exit(EXIT_OK)
+
+
+@app.command()
+def show(
+    id_or_name: Annotated[str, typer.Argument(help="Episode id or (partial) episode name")],
+    config: Annotated[Path, typer.Option("--config", help="Path to config.yaml")] = Path(
+        "config.yaml"
+    ),
+) -> None:
+    """Print a recorded episode's full transcript and audio link."""
+    client, logger = _connect_supabase(config)
+    try:
+        episode = get_episode(client, id_or_name)
+    except RecordError as e:
+        logger.error(str(e))
+        console.print(f"[bold red]Failed to look up episode:[/] {e}")
+        raise typer.Exit(EXIT_COMMAND_FAILED) from e
+
+    if episode is None:
+        console.print(f"[bold red]No episode found matching:[/] {id_or_name}")
+        raise typer.Exit(EXIT_COMMAND_FAILED)
+
+    audio_url = episode.audio_public_url
+    if not audio_url:
+        try:
+            audio_url, _is_public = resolve_audio_url(
+                client, episode.audio_bucket, episode.audio_object_path
+            )
+        except Exception as e:
+            logger.error(str(e))
+            audio_url = None
+
+    console.print(f"[bold]{episode.episode_name}[/]")
+    console.print()
+    console.print("--- TRANSCRIPT ---")
+    console.print(episode.transcript_text)
+    console.print()
+    console.print("--- AUDIO ---")
+    console.print(audio_url or "[yellow]Could not generate an audio URL.[/]")
+    raise typer.Exit(EXIT_OK)
 
 
 if __name__ == "__main__":
