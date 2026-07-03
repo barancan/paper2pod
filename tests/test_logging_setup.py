@@ -2,6 +2,7 @@ import logging
 
 from paper2pod.logging_setup import (
     ParseError,
+    SourceError,
     StorageError,
     TranscriptError,
     TTSError,
@@ -18,6 +19,14 @@ def test_typed_exceptions_carry_stage_and_input_file():
     assert TranscriptError.stage == "transcript"
     assert TTSError.stage == "tts"
     assert StorageError.stage == "storage"
+
+
+def test_source_error_carries_stage_and_url():
+    url = "https://openlabs.bio.xyz/projects/abc-123"
+    err = SourceError("fetch failed", input_file=url)
+    assert err.stage == "source"
+    assert err.input_file == url
+    assert url in str(err)
 
 
 def test_setup_logging_creates_rotating_file_and_console_handlers(tmp_path):

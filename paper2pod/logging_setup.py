@@ -16,7 +16,11 @@ REDACTED = "***REDACTED***"
 
 
 class Paper2PodError(Exception):
-    """Base for typed pipeline errors. Carries the failing stage and input file."""
+    """Base for typed pipeline errors. Carries the failing stage and input.
+
+    `input_file` holds whatever input this pipeline was working on -- a
+    local file path for most stages, or a URL for SourceError.
+    """
 
     stage: str = "unknown"
 
@@ -25,7 +29,7 @@ class Paper2PodError(Exception):
         super().__init__(message)
 
     def __str__(self) -> str:
-        suffix = f" (file: {self.input_file})" if self.input_file else ""
+        suffix = f" (input: {self.input_file})" if self.input_file else ""
         return f"{super().__str__()}{suffix}"
 
 
@@ -43,6 +47,12 @@ class TTSError(Paper2PodError):
 
 class StorageError(Paper2PodError):
     stage = "storage"
+
+
+class SourceError(Paper2PodError):
+    """Raised when fetching an external content source (e.g. OpenLabs) fails."""
+
+    stage = "source"
 
 
 def redact_secrets(text: str, secrets: Iterable[str]) -> str:

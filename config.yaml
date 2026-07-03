@@ -23,3 +23,8 @@ cta:
     If this got you curious, head over to OpenLabs and explore the projects
     other researchers are working on. And if you have research of your own,
     share it there. The next breakthrough might be yours.
+
+openlabs:
+  base_url: https://openlabs.bio.xyz
+  cache_ttl_hours: 24
+  min_content_words: 200

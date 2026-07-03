@@ -171,3 +171,21 @@ def test_cta_text_env_override(tmp_path, monkeypatch):
     monkeypatch.setenv("PAPER2POD_CTA__TEXT", "Go check out OpenLabs today.")
     cfg = load_config(config_path=tmp_path / "none.yaml")
     assert cfg.cta.text == "Go check out OpenLabs today."
+
+
+def test_openlabs_defaults(tmp_path):
+    cfg = load_config(config_path=tmp_path / "none.yaml")
+    assert cfg.openlabs.base_url == "https://openlabs.bio.xyz"
+    assert cfg.openlabs.cache_ttl_hours == 24
+    assert cfg.openlabs.min_content_words == 200
+
+
+def test_openlabs_yaml_overrides(tmp_path):
+    yaml_path = tmp_path / "config.yaml"
+    yaml_path.write_text(
+        "openlabs:\n  base_url: https://staging.openlabs.bio.xyz\n  cache_ttl_hours: 6\n"
+    )
+    cfg = load_config(config_path=yaml_path)
+    assert cfg.openlabs.base_url == "https://staging.openlabs.bio.xyz"
+    assert cfg.openlabs.cache_ttl_hours == 6
+    assert cfg.openlabs.min_content_words == 200

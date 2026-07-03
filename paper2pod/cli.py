@@ -45,6 +45,7 @@ EXIT_PARSE_ERROR = 3
 EXIT_TRANSCRIPT_ERROR = 4
 EXIT_TTS_ERROR = 5
 EXIT_STORAGE_ERROR = 6
+EXIT_SOURCE_ERROR = 7
 
 
 def _format_duration(total_seconds: float) -> str:

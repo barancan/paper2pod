@@ -54,6 +54,11 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         "enabled": True,
         "text": DEFAULT_CTA_TEXT,
     },
+    "openlabs": {
+        "base_url": "https://openlabs.bio.xyz",
+        "cache_ttl_hours": 24,
+        "min_content_words": 200,
+    },
 }
 
 
@@ -113,12 +118,19 @@ class CTAConfig(BaseModel):
         return self
 
 
+class OpenLabsConfig(BaseModel):
+    base_url: str = "https://openlabs.bio.xyz"
+    cache_ttl_hours: int = 24
+    min_content_words: int = 200
+
+
 class AppConfig(BaseModel):
     transcript: TranscriptConfig = TranscriptConfig()
     tts: TTSConfig = TTSConfig()
     storage: StorageConfig = StorageConfig()
     logging: LoggingConfig = LoggingConfig()
     cta: CTAConfig = CTAConfig()
+    openlabs: OpenLabsConfig = OpenLabsConfig()
 
 
 class Secrets(BaseSettings):
