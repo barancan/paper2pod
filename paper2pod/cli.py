@@ -10,7 +10,14 @@ from typing import Annotated
 import typer
 from rich.console import Console
 
-from paper2pod.config import ConfigError, load_config, load_secrets, validate_secrets
+from paper2pod.config import (
+    CTA_WARN_WORDS,
+    ConfigError,
+    cta_word_count,
+    load_config,
+    load_secrets,
+    validate_secrets,
+)
 from paper2pod.logging_setup import (
     ParseError,
     StorageError,
@@ -74,6 +81,14 @@ def run(
         console.print(f"[bold red]Config error:[/] {e}")
         raise typer.Exit(EXIT_CONFIG_ERROR) from e
 
+    if app_config.cta.enabled:
+        cta_words = cta_word_count(app_config.cta.text)
+        if cta_words > CTA_WARN_WORDS:
+            console.print(
+                f"[yellow]Warning:[/] cta.text is {cta_words} words; "
+                "long CTAs add to the spoken runtime."
+            )
+
     secret_values = [
         v
         for v in (
@@ -116,7 +131,7 @@ def run(
     try:
         with console.status("Generating transcript..."):
             transcript = generate_transcript(
-                body, metadata, app_config.transcript, secrets=secrets
+                body, metadata, app_config.transcript, secrets=secrets, cta_config=app_config.cta
             )
     except TranscriptError as e:
         logger.error(str(e))

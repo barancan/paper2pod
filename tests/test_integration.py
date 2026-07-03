@@ -11,7 +11,7 @@ import pytest
 from typer.testing import CliRunner
 
 from paper2pod import cli as cli_module
-from paper2pod.config import Secrets
+from paper2pod.config import DEFAULT_CTA_TEXT, Secrets
 from paper2pod.transcript import Transcript
 
 runner = CliRunner()
@@ -31,7 +31,9 @@ class FakeTTSProvider:
         return out_path
 
 
-def _fake_generate(paper_text, metadata, style_config, secrets=None, call_fn=None):
+def _fake_generate(
+    paper_text, metadata, style_config, secrets=None, call_fn=None, cta_config=None
+):
     return Transcript(
         text=FAKE_TRANSCRIPT_TEXT.strip(),
         title=metadata.title,
@@ -70,6 +72,79 @@ def test_dry_run_stops_before_tts_and_prints_transcript(monkeypatch):
     assert "Transcript generated" in result.stdout
     # Rich wraps long lines to terminal width, so check content, not exact whitespace.
     assert result.stdout.count("word") >= 350
+
+
+def _fake_bind_provider_call(provider, secrets):
+    def call_fn(model, system, messages):
+        return "word " * 350
+
+    return call_fn
+
+
+def test_run_dry_run_ends_with_default_cta_text(monkeypatch):
+    """Exercises the real generate_transcript() (not mocked) to prove cli.py
+    actually wires app_config.cta through, end to end."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.setattr("paper2pod.transcript._bind_provider_call", _fake_bind_provider_call)
+
+    result = runner.invoke(cli_module.app, ["run", str(FIXTURES / "frontmatter.md"), "--dry-run"])
+
+    assert result.exit_code == 0, result.stdout
+    normalized = " ".join(result.stdout.split())
+    assert normalized.endswith(" ".join(DEFAULT_CTA_TEXT.split()))
+
+
+def test_run_dry_run_cta_disabled_via_config(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.setattr("paper2pod.transcript._bind_provider_call", _fake_bind_provider_call)
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text('cta:\n  enabled: false\n  text: ""\n')
+
+    result = runner.invoke(
+        cli_module.app,
+        ["run", str(FIXTURES / "frontmatter.md"), "--config", str(config_path), "--dry-run"],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    for word in DEFAULT_CTA_TEXT.split()[:6]:
+        assert word not in result.stdout
+
+
+def test_run_dry_run_custom_cta_text_appears_verbatim(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.setattr("paper2pod.transcript._bind_provider_call", _fake_bind_provider_call)
+
+    custom_cta = "Go explore OpenLabs right now and post your own research there."
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(f'cta:\n  enabled: true\n  text: "{custom_cta}"\n')
+
+    result = runner.invoke(
+        cli_module.app,
+        ["run", str(FIXTURES / "frontmatter.md"), "--config", str(config_path), "--dry-run"],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    normalized = " ".join(result.stdout.split())
+    assert normalized.endswith(custom_cta)
+
+
+def test_run_warns_when_cta_text_exceeds_60_words(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.setattr("paper2pod.transcript._bind_provider_call", _fake_bind_provider_call)
+
+    long_cta = " ".join(["word"] * 65)
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(f'cta:\n  enabled: true\n  text: "{long_cta}"\n')
+
+    result = runner.invoke(
+        cli_module.app,
+        ["run", str(FIXTURES / "frontmatter.md"), "--config", str(config_path), "--dry-run"],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert "Warning" in result.stdout
+    assert "65 words" in result.stdout
 
 
 def test_full_pipeline_uploads_and_prints_url(monkeypatch):
