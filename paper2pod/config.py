@@ -34,6 +34,10 @@ DEFAULTS: dict[str, dict[str, Any]] = {
     "transcript": {
         "provider": "anthropic",
         "model": "claude-sonnet-4-6",
+        # Empty by default -- shipped config.yaml provides the real per-provider
+        # defaults, same as every other section. Only non-empty here if the
+        # user opts in via config.yaml/env/CLI; see _resolve_provider_model().
+        "models": {},
         "max_input_tokens": 12000,
         "target_words": [320, 420],
     },
@@ -76,6 +80,10 @@ def _missing_var_error(name: str) -> ConfigError:
 class TranscriptConfig(BaseModel):
     provider: Literal["anthropic", "openai"] = "anthropic"
     model: str = "claude-sonnet-4-6"
+    # Optional per-provider model overrides, e.g. {"anthropic": "...", "openai": "..."}.
+    # When the active provider has an entry here, it's used instead of `model`
+    # (unless --model was passed on the CLI) -- see _resolve_provider_model().
+    models: dict[str, str] = {}
     max_input_tokens: int = 12000
     target_words: tuple[int, int] = (320, 420)
 
@@ -168,6 +176,25 @@ def _env_overrides() -> dict[str, dict[str, Any]]:
     return overrides
 
 
+def _resolve_provider_model(
+    merged: dict[str, Any], cli_overrides: dict[str, Any] | None
+) -> dict[str, Any]:
+    """Apply transcript.models[provider] to transcript.model, unless --model was passed."""
+    transcript_cfg = merged.get("transcript")
+    if not isinstance(transcript_cfg, dict):
+        return merged
+
+    models_map = transcript_cfg.get("models")
+    if not isinstance(models_map, dict):
+        return merged
+
+    cli_set_model = bool(((cli_overrides or {}).get("transcript") or {}).get("model"))
+    provider = transcript_cfg.get("provider")
+    if not cli_set_model and provider in models_map:
+        transcript_cfg["model"] = models_map[provider]
+    return merged
+
+
 def load_config(
     config_path: Path | str = DEFAULT_CONFIG_PATH,
     cli_overrides: dict[str, Any] | None = None,
@@ -183,6 +210,7 @@ def load_config(
     merged = _deep_merge(merged, _env_overrides())
     if cli_overrides:
         merged = _deep_merge(merged, cli_overrides)
+    merged = _resolve_provider_model(merged, cli_overrides)
 
     try:
         return AppConfig(**merged)

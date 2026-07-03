@@ -189,3 +189,67 @@ def test_openlabs_yaml_overrides(tmp_path):
     assert cfg.openlabs.base_url == "https://staging.openlabs.bio.xyz"
     assert cfg.openlabs.cache_ttl_hours == 6
     assert cfg.openlabs.min_content_words == 200
+
+
+def test_default_models_by_provider(tmp_path):
+    cfg = load_config(config_path=tmp_path / "none.yaml")
+    assert cfg.transcript.provider == "anthropic"
+    assert cfg.transcript.model == "claude-sonnet-4-6"
+
+
+def test_per_provider_model_used_for_active_provider(tmp_path):
+    yaml_path = tmp_path / "config.yaml"
+    yaml_path.write_text(
+        "transcript:\n"
+        "  provider: openai\n"
+        "  models:\n"
+        "    anthropic: claude-custom\n"
+        "    openai: gpt-custom\n"
+    )
+    cfg = load_config(config_path=yaml_path)
+    assert cfg.transcript.model == "gpt-custom"
+
+
+def test_switching_provider_switches_resolved_model(tmp_path):
+    yaml_path = tmp_path / "config.yaml"
+    yaml_path.write_text(
+        "transcript:\n"
+        "  models:\n"
+        "    anthropic: claude-custom\n"
+        "    openai: gpt-custom\n"
+    )
+    anthropic_cfg = load_config(config_path=yaml_path)
+    assert anthropic_cfg.transcript.model == "claude-custom"
+
+    yaml_path.write_text(
+        "transcript:\n"
+        "  provider: openai\n"
+        "  models:\n"
+        "    anthropic: claude-custom\n"
+        "    openai: gpt-custom\n"
+    )
+    openai_cfg = load_config(config_path=yaml_path)
+    assert openai_cfg.transcript.model == "gpt-custom"
+
+
+def test_flat_model_used_when_no_per_provider_entry(tmp_path):
+    yaml_path = tmp_path / "config.yaml"
+    yaml_path.write_text(
+        "transcript:\n  provider: openai\n  model: gpt-flat-fallback\n  models: {}\n"
+    )
+    cfg = load_config(config_path=yaml_path)
+    assert cfg.transcript.model == "gpt-flat-fallback"
+
+
+def test_cli_model_override_wins_over_per_provider_models(tmp_path):
+    yaml_path = tmp_path / "config.yaml"
+    yaml_path.write_text(
+        "transcript:\n"
+        "  provider: anthropic\n"
+        "  models:\n"
+        "    anthropic: claude-from-yaml\n"
+    )
+    cfg = load_config(
+        config_path=yaml_path, cli_overrides={"transcript": {"model": "claude-from-cli"}}
+    )
+    assert cfg.transcript.model == "claude-from-cli"

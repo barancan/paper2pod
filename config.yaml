@@ -1,12 +1,15 @@
 transcript:
   provider: anthropic # anthropic | openai
-  model: claude-sonnet-4-6
+  model: claude-sonnet-4-6 # fallback used only if `models` has no entry for `provider`
+  models:
+    anthropic: claude-sonnet-4-6
+    openai: gpt-4o
   max_input_tokens: 12000
   target_words: [320, 420]
 
 tts:
   provider: edge # edge | elevenlabs
-  voice: en-US-GuyNeural
+  voice: en-US-AndrewMultilingualNeural
   rate: "+8%" # slight pace-up to match the reference style
 
 storage:

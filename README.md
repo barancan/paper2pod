@@ -77,7 +77,8 @@ at startup with the exact variable name.
 | Key                           | Default                    | Notes                                                                                                                                                   |
 | ----------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `transcript.provider`         | `anthropic`                | `anthropic` or `openai`                                                                                                                                 |
-| `transcript.model`            | `claude-sonnet-4-6`        | model string passed to the provider                                                                                                                     |
+| `transcript.model`            | `claude-sonnet-4-6`        | fallback model string, used only if `transcript.models` has no entry for `provider`                                                                     |
+| `transcript.models`           | see `config.yaml`          | optional per-provider model map, e.g. `{anthropic: ..., openai: ...}`; the entry for the active `provider` wins over `transcript.model`                 |
 | `transcript.max_input_tokens` | `12000`                    | paper body is truncated to roughly this many tokens                                                                                                     |
 | `transcript.target_words`     | `[320, 420]`               | narration length target                                                                                                                                 |
 | `tts.provider`                | `edge`                     | `edge` (free) or `elevenlabs` (keyed)                                                                                                                   |
@@ -109,9 +110,13 @@ flags `--config`, `--voice`, and `--model` override everything else.
 
 ## Switching providers
 
-**Transcript:** set `transcript.provider: openai` in `config.yaml` (or pass
-`--model gpt-4o` etc.) and put `OPENAI_API_KEY` in `.env`. Both providers
-implement the same `generate()` interface, so no code changes are needed.
+**Transcript:** set `transcript.provider: openai` in `config.yaml` and put
+`OPENAI_API_KEY` in `.env`. Both providers implement the same `generate()`
+interface, so no code changes are needed. If you keep a `transcript.models`
+map (the shipped `config.yaml` does, with entries for both providers),
+switching `provider` automatically switches to the right model too, with no
+need to also update `transcript.model` by hand. `--model` on the command
+line always overrides both for that one run.
 
 **TTS:** set `tts.provider: elevenlabs` in `config.yaml`, put
 `ELEVENLABS_API_KEY` in `.env`, and set `tts.voice` to an ElevenLabs voice
@@ -244,3 +249,10 @@ Choices made where the spec was silent:
 - **`Paper2PodError`'s `__str__` suffix changed from `(file: ...)` to
   `(input: ...)`**, since `input_file` now also carries a URL for
   `SourceError`; no code or test depended on the old literal wording.
+- **Per-provider models (`transcript.models`) default to an empty map in
+  code**, not to a pre-filled `{anthropic: ..., openai: ...}` dict: the
+  shipped `config.yaml` is what actually populates it, same as every other
+  section. Defaulting it non-empty in code would make the per-provider
+  entry win unconditionally, silently overriding a plain `--model` flag,
+  `PAPER2POD_TRANSCRIPT__MODEL`, or a hand-edited flat `transcript.model` any
+  time its provider happened to already have a code-level default.
