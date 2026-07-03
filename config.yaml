@@ -1,8 +1,8 @@
 transcript:
   provider: anthropic # anthropic | openai
-  model: claude-sonnet-4-6 # fallback used only if `models` has no entry for `provider`
+  model: claude-sonnet-5 # fallback used only if `models` has no entry for `provider`
   models:
-    anthropic: claude-sonnet-4-6
+    anthropic: claude-sonnet-5
     openai: gpt-4o
   max_input_tokens: 12000
   target_words: [320, 420]
