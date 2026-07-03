@@ -43,6 +43,52 @@ Formatting rules (strict):
 
 Output only the narration text itself, with no preamble, labels, or commentary."""
 
+PROJECT_BRIEF_SYSTEM_PROMPT_TEMPLATE = """You are the narrator for an OpenLabs project \
+spotlight. You turn a research project's page content into an enthusiastic, ear-friendly \
+spoken brief meant to be read aloud.
+
+Voice and tone:
+- Enthusiastic and accessible, like you can't wait to share what this project is doing.
+- Address the listener directly in second person.
+- Warm, curious, a little playful -- never dry or academic.
+
+Structure, in this order:
+1. Hook: open with a vivid, curiosity-grabbing line about the project's mission.
+2. What the project is trying to solve.
+3. Why it matters.
+4. Approach and current status.
+5. Who is behind it -- the team or creator name(s), if known.
+6. One concrete detail: a specific number, milestone, or method drawn directly from the \
+content.
+7. Closing: end with a natural, satisfying closing sentence. Do not add a sign-off \
+catchphrase or call to action of your own -- a call to action will be appended after your \
+narration, so just land it cleanly.
+
+Formatting rules (strict):
+- Plain speech only. No markdown, no bullet points, no headers, no asterisks, no backticks.
+- No citations, no URLs read aloud.
+- Write every number the way it should be spoken aloud (e.g. "thirty-five thousand", not \
+"35,000"; "two and a half times", not "2.5x").
+- Target length: {min_words} to {max_words} words -- aim for the middle of that range.
+
+Factual accuracy (strict):
+- Only state claims that are explicitly present in the provided project content. Do not \
+invent results, data, funding, dates, or outcomes.
+- If the content describes a goal or an open question rather than a completed result, \
+present it as a goal or an open question -- do not imply it has already been achieved.
+
+Output only the narration text itself, with no preamble, labels, or commentary."""
+
+SYSTEM_PROMPTS: dict[str, str] = {
+    "paper": SYSTEM_PROMPT_TEMPLATE,
+    "project_brief": PROJECT_BRIEF_SYSTEM_PROMPT_TEMPLATE,
+}
+
+USER_PROMPT_LABELS: dict[str, tuple[str, str, str]] = {
+    "paper": ("Paper title", "Authors", "Paper content"),
+    "project_brief": ("Project title", "Team", "Project content"),
+}
+
 MARKDOWN_ARTIFACT_RE = re.compile(r"[*_`#]+")
 MARKDOWN_BULLET_RE = re.compile(r"^\s*[-•]\s+", re.MULTILINE)
 
@@ -124,13 +170,16 @@ def _call_with_retry(
 
 
 def _build_user_prompt(
-    metadata: PaperMetadata, paper_text: str, min_words: int, max_words: int
+    metadata: PaperMetadata, paper_text: str, min_words: int, max_words: int, style: str
 ) -> str:
-    authors = ", ".join(metadata.authors) if metadata.authors else "the researchers"
+    subject_label, who_label, content_label = USER_PROMPT_LABELS.get(
+        style, USER_PROMPT_LABELS["paper"]
+    )
+    who = ", ".join(metadata.authors) if metadata.authors else "the researchers"
     return (
-        f"Paper title: {metadata.title}\n"
-        f"Authors: {authors}\n\n"
-        f"Paper content:\n{paper_text}\n\n"
+        f"{subject_label}: {metadata.title}\n"
+        f"{who_label}: {who}\n\n"
+        f"{content_label}:\n{paper_text}\n\n"
         f"Write the narration script now, {min_words}-{max_words} words."
     )
 
@@ -160,8 +209,12 @@ def generate(
     secrets: Any = None,
     call_fn: ProviderCall | None = None,
     cta_config: Any = None,
+    style: str = "paper",
 ) -> Transcript:
-    """Generate a Two Minute Papers style transcript for the given paper.
+    """Generate an enthusiastic narration transcript for the given content.
+
+    style selects the system prompt / user-prompt labels: "paper" (default,
+    Two Minute Papers style) or "project_brief" (OpenLabs project spotlight).
 
     The LLM's 320-420 word budget applies to the body only. If cta_config is
     enabled, its text is appended verbatim afterward -- it is never sent to
@@ -170,8 +223,11 @@ def generate(
     call = call_fn or _bind_provider_call(style_config.provider, secrets)
     min_words, max_words = style_config.target_words
 
-    system_prompt = SYSTEM_PROMPT_TEMPLATE.format(min_words=min_words, max_words=max_words)
-    user_prompt = _build_user_prompt(metadata, paper_text, min_words, max_words)
+    template = SYSTEM_PROMPTS.get(style)
+    if template is None:
+        raise TranscriptError(f"Unknown transcript style: {style}")
+    system_prompt = template.format(min_words=min_words, max_words=max_words)
+    user_prompt = _build_user_prompt(metadata, paper_text, min_words, max_words, style)
     messages: list[dict[str, str]] = [{"role": "user", "content": user_prompt}]
 
     body_text = _clean_plain_speech(

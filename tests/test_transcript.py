@@ -141,3 +141,45 @@ def test_unknown_provider_raises_transcript_error():
     style = SimpleNamespace(provider="not-a-provider", model="x", target_words=(320, 420))
     with pytest.raises(TranscriptError, match="Unknown transcript provider"):
         generate("body", metadata, style, secrets=None)
+
+
+def test_unknown_style_raises_transcript_error():
+    metadata = PaperMetadata(title="Test", authors=[])
+    with pytest.raises(TranscriptError, match="Unknown transcript style"):
+        generate(
+            "body", metadata, _style_config(), call_fn=lambda m, s, msgs: GOOD_TEXT, style="bogus"
+        )
+
+
+def test_project_brief_style_uses_project_labels_and_hallucination_guard():
+    seen = {}
+
+    def call_fn(model, system, messages):
+        seen["system"] = system
+        seen["user"] = messages[0]["content"]
+        return GOOD_TEXT
+
+    metadata = PaperMetadata(title="Steam Collective", authors=["STEAM SPIRIT"])
+    generate(
+        "project body text", metadata, _style_config(), call_fn=call_fn, style="project_brief"
+    )
+
+    assert "Project title: Steam Collective" in seen["user"]
+    assert "Team: STEAM SPIRIT" in seen["user"]
+    assert "Project content:" in seen["user"]
+    assert "Paper title" not in seen["user"]
+    assert "only state claims" in seen["system"].lower()
+    assert "who is behind it" in seen["system"].lower()
+
+
+def test_paper_style_prompt_wording_unchanged_by_default():
+    seen = {}
+
+    def call_fn(model, system, messages):
+        seen["user"] = messages[0]["content"]
+        return GOOD_TEXT
+
+    metadata = PaperMetadata(title="A Paper", authors=["A. Author"])
+    generate("body text", metadata, _style_config(), call_fn=call_fn)
+
+    assert seen["user"].startswith("Paper title: A Paper\nAuthors: A. Author")
