@@ -30,8 +30,9 @@ Structure, in this order:
 3. Why it's hard: give the listener a sense of the challenge being solved.
 4. Key result: state the headline finding with one concrete number.
 5. Limitation: briefly and honestly note a limitation or caveat.
-6. Closing: sign off with an enthusiastic, varied close in the spirit of "What a time to \
-be alive!" -- do not use that exact line every time.
+6. Closing: end with a natural, satisfying closing sentence that wraps up the key result. \
+Do not add a sign-off catchphrase or call to action of your own -- a call to action will \
+be appended after your narration, so just land the story cleanly.
 
 Formatting rules (strict):
 - Plain speech only. No markdown, no bullet points, no headers, no asterisks, no backticks.
@@ -158,8 +159,14 @@ def generate(
     style_config: Any,
     secrets: Any = None,
     call_fn: ProviderCall | None = None,
+    cta_config: Any = None,
 ) -> Transcript:
-    """Generate a Two Minute Papers style transcript for the given paper."""
+    """Generate a Two Minute Papers style transcript for the given paper.
+
+    The LLM's 320-420 word budget applies to the body only. If cta_config is
+    enabled, its text is appended verbatim afterward -- it is never sent to
+    the LLM, so the configured wording is guaranteed to be what gets spoken.
+    """
     call = call_fn or _bind_provider_call(style_config.provider, secrets)
     min_words, max_words = style_config.target_words
 
@@ -167,21 +174,27 @@ def generate(
     user_prompt = _build_user_prompt(metadata, paper_text, min_words, max_words)
     messages: list[dict[str, str]] = [{"role": "user", "content": user_prompt}]
 
-    text = _clean_plain_speech(_call_with_retry(call, style_config.model, system_prompt, messages))
-    word_count = _count_words(text)
+    body_text = _clean_plain_speech(
+        _call_with_retry(call, style_config.model, system_prompt, messages)
+    )
+    body_word_count = _count_words(body_text)
 
-    if word_count > max_words:
-        messages.append({"role": "assistant", "content": text})
+    if body_word_count > max_words:
+        messages.append({"role": "assistant", "content": body_text})
         messages.append(
-            {"role": "user", "content": _compression_prompt(word_count, min_words, max_words)}
+            {"role": "user", "content": _compression_prompt(body_word_count, min_words, max_words)}
         )
-        text = _clean_plain_speech(
+        body_text = _clean_plain_speech(
             _call_with_retry(call, style_config.model, system_prompt, messages)
         )
-        word_count = _count_words(text)
+
+    final_text = body_text.rstrip()
+    if cta_config is not None and getattr(cta_config, "enabled", False):
+        final_text = f"{final_text} {cta_config.text}"
+    word_count = _count_words(final_text)
 
     return Transcript(
-        text=text,
+        text=final_text,
         title=metadata.title,
         authors=metadata.authors,
         word_count=word_count,
