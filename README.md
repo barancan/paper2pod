@@ -56,11 +56,19 @@ reference below). Never commit `.env`, it's already covered by
 
 `paper2pod openlabs <project-url>` takes the same flags as `run` (plus
 `--no-cache`) and produces a spoken brief for an OpenLabs project instead of
-a paper:
+a paper. Grab any project URL from https://openlabs.bio.xyz/projects, for
+example:
 
 ```bash
-paper2pod openlabs https://openlabs.bio.xyz/projects/<id> --dry-run
-paper2pod openlabs https://openlabs.bio.xyz/projects/<id>
+paper2pod openlabs https://openlabs.bio.xyz/projects/aab54f59-abc7-44b9-8736-4d6d56111f37 --dry-run
+paper2pod openlabs https://openlabs.bio.xyz/projects/aab54f59-abc7-44b9-8736-4d6d56111f37
+```
+
+Add `--no-cache` to force a fresh fetch instead of reading the previous
+result from `cache/openlabs/`:
+
+```bash
+paper2pod openlabs https://openlabs.bio.xyz/projects/aab54f59-abc7-44b9-8736-4d6d56111f37 --dry-run --no-cache
 ```
 
 Both commands share the same transcript/CTA/TTS/upload pipeline and produce
