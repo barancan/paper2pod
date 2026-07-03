@@ -15,6 +15,7 @@ from paper2pod.config import (
     AppConfig,
     ConfigError,
     Secrets,
+    build_overrides,
     cta_word_count,
     load_config,
     load_secrets,
@@ -58,20 +59,11 @@ EXIT_STORAGE_ERROR = 6
 EXIT_SOURCE_ERROR = 7
 
 
-def _cli_overrides(voice: str | None, model: str | None) -> dict[str, dict[str, str]]:
-    overrides: dict[str, dict[str, str]] = {}
-    if voice:
-        overrides["tts"] = {"voice": voice}
-    if model:
-        overrides["transcript"] = {"model": model}
-    return overrides
-
-
 def _load_and_validate_config(
     config: Path, voice: str | None, model: str | None, dry_run: bool
 ) -> tuple[AppConfig, Secrets]:
     try:
-        app_config = load_config(config_path=config, cli_overrides=_cli_overrides(voice, model))
+        app_config = load_config(config_path=config, cli_overrides=build_overrides(voice, model))
         secrets = load_secrets()
         validate_secrets(secrets, app_config, dry_run=dry_run)
     except ConfigError as e:

@@ -173,6 +173,27 @@ class Secrets(BaseSettings):
     api_auth_token: str | None = None
 
 
+def build_overrides(
+    voice: str | None = None,
+    model: str | None = None,
+    cta_enabled: bool | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Build a cli_overrides-shaped dict for load_config(), shared by the CLI and API.
+
+    Both front ends produce overrides the identical way, so "same precedence
+    rules as CLI flags" (CLI/request overrides > env > yaml > defaults) holds
+    by construction rather than by two separately-maintained implementations.
+    """
+    overrides: dict[str, dict[str, Any]] = {}
+    if voice:
+        overrides["tts"] = {"voice": voice}
+    if model:
+        overrides["transcript"] = {"model": model}
+    if cta_enabled is not None:
+        overrides["cta"] = {"enabled": cta_enabled}
+    return overrides
+
+
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
     merged = dict(base)
     for key, value in override.items():
@@ -266,3 +287,9 @@ def validate_supabase_secrets(secrets: Secrets) -> None:
         raise _missing_var_error("SUPABASE_URL")
     if not secrets.supabase_service_role_key:
         raise _missing_var_error("SUPABASE_SERVICE_ROLE_KEY")
+
+
+def validate_api_secrets(secrets: Secrets) -> None:
+    """Fail fast for `paper2pod serve`: no accidental open server."""
+    if not secrets.api_auth_token:
+        raise _missing_var_error("API_AUTH_TOKEN")
