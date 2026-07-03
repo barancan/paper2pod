@@ -21,8 +21,10 @@ from paper2pod.config import (
     load_secrets,
     validate_secrets,
 )
+from paper2pod.db import EpisodeRecord, record_episode
 from paper2pod.logging_setup import (
     ParseError,
+    RecordError,
     SourceError,
     StorageError,
     TranscriptError,
@@ -31,7 +33,7 @@ from paper2pod.logging_setup import (
 )
 from paper2pod.parser import PaperMetadata, parse_markdown
 from paper2pod.sources.openlabs import fetch_project
-from paper2pod.storage import build_object_name
+from paper2pod.storage import build_object_name, format_authors
 from paper2pod.storage import upload as upload_recording
 from paper2pod.transcript import generate as generate_transcript
 from paper2pod.tts import get_provider
@@ -112,8 +114,10 @@ def _generate_and_publish(
     secrets: Secrets,
     dry_run: bool,
     logger: logging.Logger,
+    source_type: str,
+    source_reference: str,
 ) -> None:
-    """Shared transcript -> CTA -> TTS -> upload pipeline for run and openlabs."""
+    """Shared transcript -> CTA -> TTS -> upload -> record pipeline for run and openlabs."""
     # Transcript generation
     t0 = time.monotonic()
     try:
@@ -185,6 +189,37 @@ def _generate_and_publish(
     console.print(f"✔ Uploaded to '{app_config.storage.bucket}'   {elapsed:.1f}s")
     console.print(upload_result.url)
 
+    # Record the episode (best-effort: must never fail an otherwise-successful run)
+    t0 = time.monotonic()
+    record = EpisodeRecord(
+        episode_name=Path(upload_result.object_path).stem,
+        source_type=source_type,
+        source_reference=source_reference,
+        title=metadata.title,
+        authors_or_team=format_authors(metadata.authors),
+        transcript_text=transcript.text,
+        cta_text=app_config.cta.text if app_config.cta.enabled else None,
+        word_count=transcript.word_count,
+        estimated_duration_seconds=int(round(transcript.estimated_duration_s)),
+        transcript_provider=app_config.transcript.provider,
+        transcript_model=app_config.transcript.model,
+        tts_voice=app_config.tts.voice,
+        audio_bucket=app_config.storage.bucket,
+        audio_object_path=upload_result.object_path,
+        audio_public_url=upload_result.url if upload_result.is_public else None,
+    )
+    try:
+        with console.status("Recording episode..."):
+            episode_id = record_episode(client, record)
+        elapsed = time.monotonic() - t0
+        console.print(f"✔ Episode recorded (id: {episode_id})   {elapsed:.1f}s")
+    except RecordError as e:
+        logger.error(str(e))
+        console.print(
+            f"[yellow]⚠ Episode record failed:[/] {e}\n"
+            f"The audio uploaded successfully; nothing was lost. URL: {upload_result.url}"
+        )
+
     out_path.unlink(missing_ok=True)
     raise typer.Exit(EXIT_OK)
 
@@ -230,7 +265,17 @@ def run(
         f"   {elapsed:.1f}s"
     )
 
-    _generate_and_publish(metadata, body, "paper", app_config, secrets, dry_run, logger)
+    _generate_and_publish(
+        metadata,
+        body,
+        "paper",
+        app_config,
+        secrets,
+        dry_run,
+        logger,
+        source_type="markdown",
+        source_reference=str(file),
+    )
 
 
 @app.command()
@@ -278,7 +323,15 @@ def openlabs(
 
     metadata = PaperMetadata(title=project.title, authors=project.team_or_authors)
     _generate_and_publish(
-        metadata, project.body_text, "project_brief", app_config, secrets, dry_run, logger
+        metadata,
+        project.body_text,
+        "project_brief",
+        app_config,
+        secrets,
+        dry_run,
+        logger,
+        source_type="openlabs",
+        source_reference=project_url,
     )
 
 
