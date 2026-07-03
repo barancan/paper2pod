@@ -63,6 +63,14 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         "cache_ttl_hours": 24,
         "min_content_words": 200,
     },
+    "api": {
+        "host": "127.0.0.1",
+        "port": 8000,
+        "max_upload_mb": 2,
+        "job_db": "jobs.db",
+        "job_retention_days": 30,
+        "allowed_openlabs_hosts": [],
+    },
 }
 
 
@@ -132,6 +140,16 @@ class OpenLabsConfig(BaseModel):
     min_content_words: int = 200
 
 
+class ApiConfig(BaseModel):
+    host: str = "127.0.0.1"
+    port: int = 8000
+    max_upload_mb: int = 2
+    job_db: str = "jobs.db"
+    job_retention_days: int = 30
+    # Empty means: only the host of openlabs.base_url is accepted.
+    allowed_openlabs_hosts: list[str] = []
+
+
 class AppConfig(BaseModel):
     transcript: TranscriptConfig = TranscriptConfig()
     tts: TTSConfig = TTSConfig()
@@ -139,6 +157,7 @@ class AppConfig(BaseModel):
     logging: LoggingConfig = LoggingConfig()
     cta: CTAConfig = CTAConfig()
     openlabs: OpenLabsConfig = OpenLabsConfig()
+    api: ApiConfig = ApiConfig()
 
 
 class Secrets(BaseSettings):
@@ -151,6 +170,7 @@ class Secrets(BaseSettings):
     elevenlabs_api_key: str | None = None
     supabase_url: str | None = None
     supabase_service_role_key: str | None = None
+    api_auth_token: str | None = None
 
 
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:

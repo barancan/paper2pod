@@ -253,3 +253,29 @@ def test_cli_model_override_wins_over_per_provider_models(tmp_path):
         config_path=yaml_path, cli_overrides={"transcript": {"model": "claude-from-cli"}}
     )
     assert cfg.transcript.model == "claude-from-cli"
+
+
+def test_api_config_defaults(tmp_path):
+    cfg = load_config(config_path=tmp_path / "none.yaml")
+    assert cfg.api.host == "127.0.0.1"
+    assert cfg.api.port == 8000
+    assert cfg.api.max_upload_mb == 2
+    assert cfg.api.job_db == "jobs.db"
+    assert cfg.api.job_retention_days == 30
+    assert cfg.api.allowed_openlabs_hosts == []
+
+
+def test_api_config_yaml_overrides(tmp_path):
+    yaml_path = tmp_path / "config.yaml"
+    yaml_path.write_text(
+        "api:\n  port: 9001\n  allowed_openlabs_hosts:\n    - staging.openlabs.bio.xyz\n"
+    )
+    cfg = load_config(config_path=yaml_path)
+    assert cfg.api.port == 9001
+    assert cfg.api.allowed_openlabs_hosts == ["staging.openlabs.bio.xyz"]
+    assert cfg.api.host == "127.0.0.1"
+
+
+def test_secrets_api_auth_token_field():
+    secrets = Secrets(_env_file=None, api_auth_token="secret-token")
+    assert secrets.api_auth_token == "secret-token"
