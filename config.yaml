@@ -16,3 +16,10 @@ storage:
 logging:
   level: INFO
   file: logs/paper2pod.log
+
+cta:
+  enabled: true
+  text: >
+    If this got you curious, head over to OpenLabs and explore the projects
+    other researchers are working on. And if you have research of your own,
+    share it there. The next breakthrough might be yours.

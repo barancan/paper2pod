@@ -10,11 +10,23 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_CONFIG_PATH = Path("config.yaml")
 DEFAULT_ENV_PATH = Path(".env")
+
+DEFAULT_CTA_TEXT = (
+    "If this got you curious, head over to OpenLabs and explore the projects "
+    "other researchers are working on. And if you have research of your own, "
+    "share it there. The next breakthrough might be yours."
+)
+MAX_CTA_WORDS = 80
+CTA_WARN_WORDS = 60
+
+
+def cta_word_count(text: str) -> int:
+    return len(text.split())
 
 # Mirrors config.yaml defaults from spec §5. Only leaf keys listed here are
 # eligible for the PAPER2POD_<SECTION>__<KEY> environment variable override.
@@ -37,6 +49,10 @@ DEFAULTS: dict[str, dict[str, Any]] = {
     "logging": {
         "level": "INFO",
         "file": "logs/paper2pod.log",
+    },
+    "cta": {
+        "enabled": True,
+        "text": DEFAULT_CTA_TEXT,
     },
 }
 
@@ -75,11 +91,34 @@ class LoggingConfig(BaseModel):
     file: str = "logs/paper2pod.log"
 
 
+class CTAConfig(BaseModel):
+    enabled: bool = True
+    text: str = DEFAULT_CTA_TEXT
+
+    @field_validator("text")
+    @classmethod
+    def _strip_text(cls, v: str) -> str:
+        return v.strip()
+
+    @model_validator(mode="after")
+    def _validate_when_enabled(self) -> CTAConfig:
+        if self.enabled:
+            if not self.text:
+                raise ValueError("cta.text must not be empty when cta.enabled is true")
+            word_count = cta_word_count(self.text)
+            if word_count > MAX_CTA_WORDS:
+                raise ValueError(
+                    f"cta.text is {word_count} words; must be {MAX_CTA_WORDS} or fewer"
+                )
+        return self
+
+
 class AppConfig(BaseModel):
     transcript: TranscriptConfig = TranscriptConfig()
     tts: TTSConfig = TTSConfig()
     storage: StorageConfig = StorageConfig()
     logging: LoggingConfig = LoggingConfig()
+    cta: CTAConfig = CTAConfig()
 
 
 class Secrets(BaseSettings):

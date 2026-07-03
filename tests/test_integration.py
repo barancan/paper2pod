@@ -11,6 +11,7 @@ import pytest
 from typer.testing import CliRunner
 
 from paper2pod import cli as cli_module
+from paper2pod.config import Secrets
 from paper2pod.transcript import Transcript
 
 runner = CliRunner()
@@ -51,6 +52,11 @@ def _clean_env(monkeypatch):
             "SUPABASE_SERVICE_ROLE_KEY",
         }:
             monkeypatch.delenv(key, raising=False)
+    # Isolate from a real .env file on disk so mocked tests only see secrets
+    # set explicitly via monkeypatch.setenv. The live smoke test (gated on
+    # PAPER2POD_LIVE=1) needs the real .env, so it's exempted below.
+    if os.environ.get("PAPER2POD_LIVE") != "1":
+        monkeypatch.setattr(cli_module, "load_secrets", lambda: Secrets(_env_file=None))
 
 
 def test_dry_run_stops_before_tts_and_prints_transcript(monkeypatch):

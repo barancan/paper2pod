@@ -1,6 +1,7 @@
 import pytest
 
 from paper2pod.config import (
+    DEFAULT_CTA_TEXT,
     ConfigError,
     Secrets,
     load_config,
@@ -127,3 +128,46 @@ def test_secrets_never_repr_leaks_via_missing_error_message(tmp_path):
     with pytest.raises(ConfigError) as exc_info:
         validate_secrets(secrets, cfg)
     assert "super-secret-value" not in str(exc_info.value)
+
+
+def test_cta_defaults_enabled_with_default_text(tmp_path):
+    cfg = load_config(config_path=tmp_path / "none.yaml")
+    assert cfg.cta.enabled is True
+    assert cfg.cta.text == DEFAULT_CTA_TEXT
+
+
+def test_cta_disabled_skips_validation_entirely(tmp_path):
+    yaml_path = tmp_path / "config.yaml"
+    yaml_path.write_text("cta:\n  enabled: false\n  text: \"\"\n")
+    cfg = load_config(config_path=yaml_path)
+    assert cfg.cta.enabled is False
+    assert cfg.cta.text == ""
+
+
+def test_cta_empty_text_while_enabled_raises_config_error(tmp_path):
+    yaml_path = tmp_path / "config.yaml"
+    yaml_path.write_text("cta:\n  enabled: true\n  text: \"   \"\n")
+    with pytest.raises(ConfigError):
+        load_config(config_path=yaml_path)
+
+
+def test_cta_over_80_words_while_enabled_raises_config_error(tmp_path):
+    yaml_path = tmp_path / "config.yaml"
+    long_text = " ".join(["word"] * 81)
+    yaml_path.write_text(f'cta:\n  enabled: true\n  text: "{long_text}"\n')
+    with pytest.raises(ConfigError, match="81 words"):
+        load_config(config_path=yaml_path)
+
+
+def test_cta_between_61_and_80_words_does_not_raise(tmp_path):
+    yaml_path = tmp_path / "config.yaml"
+    text_70_words = " ".join(["word"] * 70)
+    yaml_path.write_text(f'cta:\n  enabled: true\n  text: "{text_70_words}"\n')
+    cfg = load_config(config_path=yaml_path)
+    assert cfg.cta.enabled is True
+
+
+def test_cta_text_env_override(tmp_path, monkeypatch):
+    monkeypatch.setenv("PAPER2POD_CTA__TEXT", "Go check out OpenLabs today.")
+    cfg = load_config(config_path=tmp_path / "none.yaml")
+    assert cfg.cta.text == "Go check out OpenLabs today."
