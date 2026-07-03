@@ -11,6 +11,7 @@ from paper2pod import cli as cli_module
 from paper2pod.config import DEFAULT_CTA_TEXT, Secrets
 from paper2pod.logging_setup import SourceError
 from paper2pod.sources.openlabs import ProjectContent
+from paper2pod.storage import UploadResult
 from paper2pod.transcript import Transcript
 
 runner = CliRunner()
@@ -105,7 +106,11 @@ def test_openlabs_full_pipeline_uploads_title_team_filename(monkeypatch):
     def fake_upload(client, bucket, object_name, local_path, upsert=False):
         upload_calls.append((bucket, object_name, local_path, upsert))
         assert local_path.exists()
-        return "https://fake.supabase.co/storage/v1/object/public/recordings/brief.mp3"
+        return UploadResult(
+            object_path=object_name,
+            url="https://fake.supabase.co/storage/v1/object/public/recordings/brief.mp3",
+            is_public=True,
+        )
 
     monkeypatch.setattr(cli_module, "upload_recording", fake_upload)
 
@@ -181,7 +186,9 @@ def test_openlabs_full_run_synthesizes_text_ending_with_cta(monkeypatch):
     monkeypatch.setattr(
         cli_module,
         "upload_recording",
-        lambda client, bucket, object_name, local_path, upsert=False: "https://fake.supabase.co/x.mp3",
+        lambda client, bucket, object_name, local_path, upsert=False: UploadResult(
+            object_path=object_name, url="https://fake.supabase.co/x.mp3", is_public=True
+        ),
     )
 
     result = runner.invoke(cli_module.app, ["openlabs", PROJECT_URL])

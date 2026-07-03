@@ -12,6 +12,7 @@ from typer.testing import CliRunner
 
 from paper2pod import cli as cli_module
 from paper2pod.config import DEFAULT_CTA_TEXT, Secrets
+from paper2pod.storage import UploadResult
 from paper2pod.transcript import Transcript
 
 runner = CliRunner()
@@ -162,7 +163,11 @@ def test_full_pipeline_uploads_and_prints_url(monkeypatch):
     def fake_upload(client, bucket, object_name, local_path, upsert=False):
         upload_calls.append((bucket, object_name, local_path, upsert))
         assert local_path.exists()
-        return "https://fake.supabase.co/storage/v1/object/public/recordings/example.mp3"
+        return UploadResult(
+            object_path=object_name,
+            url="https://fake.supabase.co/storage/v1/object/public/recordings/example.mp3",
+            is_public=True,
+        )
 
     monkeypatch.setattr(cli_module, "upload_recording", fake_upload)
 

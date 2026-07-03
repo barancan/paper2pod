@@ -170,7 +170,7 @@ def _generate_and_publish(
 
             client = create_client(secrets.supabase_url, secrets.supabase_service_role_key)
             object_name = build_object_name(metadata.title, metadata.authors)
-            url = upload_recording(
+            upload_result = upload_recording(
                 client,
                 app_config.storage.bucket,
                 object_name,
@@ -183,7 +183,7 @@ def _generate_and_publish(
         raise typer.Exit(EXIT_STORAGE_ERROR) from e
     elapsed = time.monotonic() - t0
     console.print(f"✔ Uploaded to '{app_config.storage.bucket}'   {elapsed:.1f}s")
-    console.print(url)
+    console.print(upload_result.url)
 
     out_path.unlink(missing_ok=True)
     raise typer.Exit(EXIT_OK)

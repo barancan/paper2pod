@@ -6,6 +6,7 @@ from paper2pod.logging_setup import StorageError
 from paper2pod.storage import (
     build_object_name,
     format_authors,
+    resolve_url,
     sanitize_component,
     upload,
 )
@@ -111,9 +112,11 @@ def test_upload_returns_public_url_when_bucket_public(tmp_path):
     bucket_api = FakeBucketFileApi()
     client = FakeSupabaseClient(bucket_api, public=True)
 
-    url = upload(client, "recordings", "Title - Author.mp3", local)
+    result = upload(client, "recordings", "Title - Author.mp3", local)
 
-    assert url == "https://fake.supabase.co/public/Title - Author.mp3"
+    assert result.url == "https://fake.supabase.co/public/Title - Author.mp3"
+    assert result.object_path == "Title - Author.mp3"
+    assert result.is_public is True
     assert bucket_api.uploaded == ["Title - Author.mp3"]
 
 
@@ -123,9 +126,10 @@ def test_upload_returns_signed_url_when_bucket_private(tmp_path):
     bucket_api = FakeBucketFileApi()
     client = FakeSupabaseClient(bucket_api, public=False)
 
-    url = upload(client, "recordings", "Title - Author.mp3", local)
+    result = upload(client, "recordings", "Title - Author.mp3", local)
 
-    assert url == "https://fake.supabase.co/signed/Title - Author.mp3"
+    assert result.url == "https://fake.supabase.co/signed/Title - Author.mp3"
+    assert result.is_public is False
 
 
 def test_upload_appends_2_suffix_on_collision_when_upsert_false(tmp_path):
@@ -134,10 +138,11 @@ def test_upload_appends_2_suffix_on_collision_when_upsert_false(tmp_path):
     bucket_api = FakeBucketFileApi(existing={"Title - Author.mp3"})
     client = FakeSupabaseClient(bucket_api, public=True)
 
-    url = upload(client, "recordings", "Title - Author.mp3", local, upsert=False)
+    result = upload(client, "recordings", "Title - Author.mp3", local, upsert=False)
 
     assert bucket_api.uploaded == ["Title - Author (2).mp3"]
-    assert url.endswith("Title - Author (2).mp3")
+    assert result.object_path == "Title - Author (2).mp3"
+    assert result.url.endswith("Title - Author (2).mp3")
 
 
 def test_upload_overwrites_on_collision_when_upsert_true(tmp_path):
@@ -146,10 +151,11 @@ def test_upload_overwrites_on_collision_when_upsert_true(tmp_path):
     bucket_api = FakeBucketFileApi(existing={"Title - Author.mp3"})
     client = FakeSupabaseClient(bucket_api, public=True)
 
-    url = upload(client, "recordings", "Title - Author.mp3", local, upsert=True)
+    result = upload(client, "recordings", "Title - Author.mp3", local, upsert=True)
 
     assert bucket_api.uploaded == ["Title - Author.mp3"]
-    assert url.endswith("Title - Author.mp3")
+    assert result.object_path == "Title - Author.mp3"
+    assert result.url.endswith("Title - Author.mp3")
 
 
 def test_upload_raises_storage_error_on_persistent_failure(tmp_path):
@@ -160,3 +166,23 @@ def test_upload_raises_storage_error_on_persistent_failure(tmp_path):
 
     with pytest.raises(StorageError, match="Supabase upload failed"):
         upload(client, "recordings", "Title - Author.mp3", local)
+
+
+def test_resolve_url_standalone_public_bucket():
+    bucket_api = FakeBucketFileApi()
+    client = FakeSupabaseClient(bucket_api, public=True)
+
+    url, is_public = resolve_url(client, "recordings", "Some Episode.mp3")
+
+    assert url == "https://fake.supabase.co/public/Some Episode.mp3"
+    assert is_public is True
+
+
+def test_resolve_url_standalone_private_bucket():
+    bucket_api = FakeBucketFileApi()
+    client = FakeSupabaseClient(bucket_api, public=False)
+
+    url, is_public = resolve_url(client, "recordings", "Some Episode.mp3")
+
+    assert url == "https://fake.supabase.co/signed/Some Episode.mp3"
+    assert is_public is False
