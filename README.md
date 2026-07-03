@@ -39,18 +39,24 @@ reference below). Never commit `.env`, it's already covered by
    whatever you set `storage.bucket` to in `config.yaml`). Mark it public if
    you want paper2pod to print a plain public URL; leave it private if you'd
    rather it print a signed URL that expires after an hour.
-2. **Fill in `.env`** with `ANTHROPIC_API_KEY` (or `OPENAI_API_KEY` if you
+2. **Create the `episodes` table.** One-time manual step: open the
+   Supabase dashboard's SQL Editor (New query) and paste in the contents of
+   `supabase/schema.sql`, then run it. This is what every successful run
+   gets recorded into (see "Episode records" below); paper2pod does not
+   create the table for you.
+3. **Fill in `.env`** with `ANTHROPIC_API_KEY` (or `OPENAI_API_KEY` if you
    set `transcript.provider: openai`), `SUPABASE_URL`, and
    `SUPABASE_SERVICE_ROLE_KEY`.
-3. **Preview a transcript without spending on TTS or storage:**
+4. **Preview a transcript without spending on TTS or storage:**
    ```bash
    paper2pod run tests/fixtures/sample_paper.md --dry-run
    ```
-4. **Run the full pipeline:**
+5. **Run the full pipeline:**
    ```bash
    paper2pod run path/to/your_paper.md
    ```
-   On success this prints the public or signed URL of the uploaded MP3.
+   On success this prints the public or signed URL of the uploaded MP3, and
+   records the episode so it's browsable with `paper2pod list`/`paper2pod show`.
 
 ### OpenLabs project briefs
 
