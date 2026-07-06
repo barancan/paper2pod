@@ -29,6 +29,7 @@ from paper2pod.logging_setup import (
     TTSError,
 )
 from paper2pod.parser import PaperMetadata, parse_markdown
+from paper2pod.pdf import build_pdf_document_block, extract_pdf_metadata, load_pdf
 from paper2pod.sources.openlabs import fetch_project
 from paper2pod.storage import UploadResult, build_object_name, format_authors
 from paper2pod.storage import upload as upload_recording
@@ -118,6 +119,67 @@ def run_markdown_pipeline(
     )
 
 
+def run_pdf_pipeline(
+    file: Path,
+    app_config: AppConfig,
+    secrets: Secrets,
+    on_event: EventCallback,
+    dry_run: bool = False,
+    source_reference: str | None = None,
+) -> PipelineResult:
+    """Load a local .pdf, then run the shared publish pipeline with the PDF sent
+    natively to Claude (Anthropic-only)."""
+    t0 = time.monotonic()
+    on_event(StageEvent(stage="parse", status="started", message=f"Parsing {file.name}..."))
+    try:
+        pdf_bytes = load_pdf(file, max_mb=app_config.api.max_pdf_mb)
+        pdf_document = build_pdf_document_block(pdf_bytes)
+        metadata = extract_pdf_metadata(
+            pdf_document,
+            provider=app_config.transcript.provider,
+            model=app_config.transcript.model,
+            secrets=secrets,
+            fallback_title=file.stem,
+        )
+    except ParseError as e:
+        on_event(
+            StageEvent(
+                stage="parse",
+                status="failed",
+                message=f"[bold red]✘ Parse failed:[/] {e}",
+                data={"error": str(e), "error_type": type(e).__name__},
+            )
+        )
+        raise
+    elapsed = time.monotonic() - t0
+    author_count = len(metadata.authors)
+    author_word = "author" if author_count == 1 else "authors"
+    on_event(
+        StageEvent(
+            stage="parse",
+            status="completed",
+            message=(
+                f'✔ Parsed {file.name} (title: "{metadata.title}", '
+                f"{author_count} {author_word})   {elapsed:.1f}s"
+            ),
+            data={"title": metadata.title, "author_count": author_count},
+        )
+    )
+
+    return _run_core_pipeline(
+        metadata,
+        "",
+        "paper",
+        app_config,
+        secrets,
+        on_event,
+        dry_run=dry_run,
+        source_type="pdf",
+        source_reference=source_reference or str(file),
+        pdf_document=pdf_document,
+    )
+
+
 def run_openlabs_pipeline(
     project_url: str,
     app_config: AppConfig,
@@ -185,8 +247,9 @@ def _run_core_pipeline(
     dry_run: bool,
     source_type: str,
     source_reference: str,
+    pdf_document: dict[str, Any] | None = None,
 ) -> PipelineResult:
-    """transcript -> CTA -> TTS -> upload -> record, shared by both source types."""
+    """transcript -> CTA -> TTS -> upload -> record, shared by all source types."""
     # Transcript generation
     t0 = time.monotonic()
     on_event(
@@ -200,6 +263,7 @@ def _run_core_pipeline(
             secrets=secrets,
             cta_config=app_config.cta,
             style=style,
+            pdf_document=pdf_document,
         )
     except TranscriptError as e:
         on_event(

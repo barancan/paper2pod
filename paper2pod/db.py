@@ -25,7 +25,7 @@ TABLE_NAME = "episodes"
 @dataclass
 class EpisodeRecord:
     episode_name: str
-    source_type: str  # "markdown" | "openlabs"
+    source_type: str  # "markdown" | "openlabs" | "pdf"
     source_reference: str
     title: str
     authors_or_team: str

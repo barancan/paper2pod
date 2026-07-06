@@ -34,7 +34,14 @@ class FakeTTSProvider:
 
 
 def _fake_generate(
-    paper_text, metadata, style_config, secrets=None, call_fn=None, cta_config=None, style="paper"
+    paper_text,
+    metadata,
+    style_config,
+    secrets=None,
+    call_fn=None,
+    cta_config=None,
+    style="paper",
+    pdf_document=None,
 ):
     return Transcript(
         text=FAKE_TRANSCRIPT_TEXT.strip(),

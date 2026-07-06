@@ -37,6 +37,7 @@ from paper2pod.pipeline import (
     format_duration,
     run_markdown_pipeline,
     run_openlabs_pipeline,
+    run_pdf_pipeline,
 )
 from paper2pod.storage import resolve_url as resolve_audio_url
 
@@ -141,7 +142,7 @@ class RichPipelineListener:
 
 @app.command()
 def run(
-    file: Annotated[Path, typer.Argument(help="Path to the paper .md file")],
+    file: Annotated[Path, typer.Argument(help="Path to the paper .md or .pdf file")],
     config: Annotated[Path, typer.Option("--config", help="Path to config.yaml")] = Path(
         "config.yaml"
     ),
@@ -153,13 +154,14 @@ def run(
         bool, typer.Option("--dry-run", help="Stop after transcript generation")
     ] = False,
 ) -> None:
-    """Convert a paper .md file into a narrated, uploaded audio recording."""
+    """Convert a paper .md or .pdf file into a narrated, uploaded audio recording."""
     app_config, secrets = _load_and_validate_config(config, voice, model, dry_run)
     logger = _setup_logger(app_config, secrets)
     listener = RichPipelineListener(console, logger)
 
+    pipeline = run_pdf_pipeline if file.suffix.lower() == ".pdf" else run_markdown_pipeline
     try:
-        result = run_markdown_pipeline(
+        result = pipeline(
             file, app_config, secrets, listener, dry_run=dry_run, source_reference=str(file)
         )
     except ParseError as e:

@@ -30,7 +30,14 @@ PROJECT_URL = "https://openlabs.bio.xyz/projects/4b7c0a52-708e-4f5c-a319-38ed510
 
 
 def _fake_generate(
-    paper_text, metadata, style_config, secrets=None, call_fn=None, cta_config=None, style="paper"
+    paper_text,
+    metadata,
+    style_config,
+    secrets=None,
+    call_fn=None,
+    cta_config=None,
+    style="paper",
+    pdf_document=None,
 ):
     return Transcript(
         text=TRANSCRIPT_TEXT,

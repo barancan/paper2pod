@@ -22,6 +22,8 @@ from paper2pod import __version__
 from paper2pod.api.auth import require_auth
 from paper2pod.api.jobs import create_job, get_job
 from paper2pod.config import AppConfig, build_overrides, load_config
+from paper2pod.logging_setup import ParseError
+from paper2pod.pdf import validate_pdf_bytes
 
 router = APIRouter(
     prefix="/v1",
@@ -156,6 +158,82 @@ async def submit_markdown_brief(request: Request) -> JobCreatedResponse:
         "source_reference": source_reference,
     }
     await request.app.state.queue.put((job_id, "markdown", payload))
+    return JobCreatedResponse(job_id=job_id, status="queued")
+
+
+@router.post(
+    "/briefs/pdf",
+    status_code=202,
+    dependencies=[Depends(require_auth)],
+    summary="Submit a PDF paper for narration",
+    response_model=JobCreatedResponse,
+)
+async def submit_pdf_brief(request: Request) -> JobCreatedResponse:
+    """Accepts a `.pdf` paper as either a raw `application/pdf` body or a
+    `multipart/form-data` upload (field name `file`), enqueues the same
+    parse -> transcript -> TTS -> upload -> record pipeline the CLI's `run`
+    command uses for PDFs, and returns immediately with a job id to poll.
+
+    The PDF is sent natively to Claude (Anthropic-only). Optional overrides
+    (`voice`, `model`, `cta_enabled`) can be sent as a JSON `overrides` form
+    field for multipart uploads, or as query parameters for raw-body uploads.
+    """
+    app_config: AppConfig = request.app.state.app_config
+    max_bytes = app_config.api.max_pdf_mb * 1024 * 1024
+    content_type = request.headers.get("content-type", "")
+
+    overrides_data: dict = {}
+    source_reference = "api-upload.pdf"
+
+    if content_type.startswith("multipart/form-data"):
+        form = await request.form()
+        upload = form.get("file")
+        if upload is None or not isinstance(upload, UploadFile):
+            raise HTTPException(status_code=422, detail="file: missing multipart file part")
+        raw_bytes = await upload.read()
+        source_reference = upload.filename or source_reference
+        overrides_part = form.get("overrides")
+        if overrides_part:
+            overrides_text = (
+                overrides_part
+                if isinstance(overrides_part, str)
+                else (await overrides_part.read()).decode("utf-8")
+            )
+            overrides_data = _parse_overrides_json(overrides_text)
+    else:
+        raw_bytes = await request.body()
+
+    if len(raw_bytes) > max_bytes:
+        limit = app_config.api.max_pdf_mb
+        raise HTTPException(status_code=413, detail=f"PDF exceeds the {limit} MB limit")
+
+    try:
+        validate_pdf_bytes(raw_bytes, max_mb=app_config.api.max_pdf_mb)
+    except ParseError as e:
+        raise HTTPException(status_code=422, detail=f"body: {e}") from e
+
+    voice = overrides_data.get("voice") or request.query_params.get("voice")
+    model = overrides_data.get("model") or request.query_params.get("model")
+    cta_enabled_raw = overrides_data.get("cta_enabled")
+    if cta_enabled_raw is None and "cta_enabled" in request.query_params:
+        cta_enabled_raw = request.query_params["cta_enabled"].lower() in ("1", "true", "yes")
+    cta_enabled = cta_enabled_raw if isinstance(cta_enabled_raw, bool) else None
+
+    per_request_config = _resolve_request_config(request, voice, model, cta_enabled)
+
+    tmp_dir = Path(tempfile.mkdtemp(prefix="paper2pod-api-"))
+    file_path = tmp_dir / (
+        source_reference if source_reference != "api-upload.pdf" else "paper.pdf"
+    )
+    file_path.write_bytes(raw_bytes)
+
+    job_id = create_job(app_config.api.job_db, "pdf")
+    payload = {
+        "file_path": file_path,
+        "app_config": per_request_config,
+        "source_reference": source_reference,
+    }
+    await request.app.state.queue.put((job_id, "pdf", payload))
     return JobCreatedResponse(job_id=job_id, status="queued")
 
 

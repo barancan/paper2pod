@@ -85,6 +85,9 @@ def _mock_successful_pipeline(monkeypatch):
     monkeypatch.setattr(
         "paper2pod.api.jobs.run_openlabs_pipeline", lambda *a, **k: _fake_pipeline_result()
     )
+    monkeypatch.setattr(
+        "paper2pod.api.jobs.run_pdf_pipeline", lambda *a, **k: _fake_pipeline_result()
+    )
 
 
 def _poll_until_terminal(client, job_id, timeout=5.0):
@@ -165,6 +168,76 @@ def test_markdown_raw_body_202_then_done_lifecycle(monkeypatch, tmp_path):
         assert final["filename"] == "Title - Author.mp3"
         assert final["episode_id"] == "episode-123"
         assert final["source_type"] == "markdown"
+
+
+def test_pdf_raw_body_202_then_done_lifecycle(monkeypatch, tmp_path):
+    _valid_env(monkeypatch)
+    _mock_successful_pipeline(monkeypatch)
+    app = create_app(config_path=_config_path(tmp_path))
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/v1/briefs/pdf",
+            content=b"%PDF-1.7\nfake pdf bytes",
+            headers={**AUTH, "content-type": "application/pdf"},
+        )
+        assert resp.status_code == 202
+        job_id = resp.json()["job_id"]
+        assert resp.json()["status"] == "queued"
+
+        final = _poll_until_terminal(client, job_id)
+        assert final["status"] == "done"
+        assert final["result_url"] == "https://fake.supabase.co/x.mp3"
+        assert final["source_type"] == "pdf"
+
+
+def test_pdf_multipart_upload_202_then_done(monkeypatch, tmp_path):
+    _valid_env(monkeypatch)
+    _mock_successful_pipeline(monkeypatch)
+    app = create_app(config_path=_config_path(tmp_path))
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/v1/briefs/pdf",
+            headers=AUTH,
+            files={"file": ("mypaper.pdf", b"%PDF-1.7\nfake pdf bytes", "application/pdf")},
+            data={"overrides": json.dumps({"voice": "en-US-JennyNeural"})},
+        )
+        assert resp.status_code == 202
+        job_id = resp.json()["job_id"]
+        final = _poll_until_terminal(client, job_id)
+        assert final["status"] == "done"
+
+
+def test_pdf_non_pdf_body_returns_422(monkeypatch, tmp_path):
+    _valid_env(monkeypatch)
+    _mock_successful_pipeline(monkeypatch)
+    app = create_app(config_path=_config_path(tmp_path))
+    with TestClient(app) as client:
+        resp = client.post(
+            "/v1/briefs/pdf",
+            content=b"this is not a pdf",
+            headers={**AUTH, "content-type": "application/pdf"},
+        )
+        assert resp.status_code == 422
+
+
+def test_pdf_oversized_body_returns_413(monkeypatch, tmp_path):
+    _valid_env(monkeypatch)
+    _mock_successful_pipeline(monkeypatch)
+    config_path = tmp_path / "config.yaml"
+    job_db = tmp_path / "jobs.db"
+    config_path.write_text(f'api:\n  job_db: "{job_db}"\n  max_pdf_mb: 1\n')
+    app = create_app(config_path=str(config_path))
+
+    with TestClient(app) as client:
+        oversized = b"%PDF-1.7\n" + b"x" * (2 * 1024 * 1024)
+        resp = client.post(
+            "/v1/briefs/pdf",
+            content=oversized,
+            headers={**AUTH, "content-type": "application/pdf"},
+        )
+        assert resp.status_code == 413
 
 
 def test_markdown_multipart_upload_202_then_done(monkeypatch, tmp_path):

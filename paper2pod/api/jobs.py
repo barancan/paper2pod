@@ -27,7 +27,12 @@ from paper2pod.logging_setup import (
     TranscriptError,
     TTSError,
 )
-from paper2pod.pipeline import StageEvent, run_markdown_pipeline, run_openlabs_pipeline
+from paper2pod.pipeline import (
+    StageEvent,
+    run_markdown_pipeline,
+    run_openlabs_pipeline,
+    run_pdf_pipeline,
+)
 
 STATUS_QUEUED = "queued"
 STATUS_RUNNING = "running"
@@ -166,6 +171,14 @@ def _process_job(
     try:
         if job_kind == "markdown":
             result = run_markdown_pipeline(
+                payload["file_path"],
+                app_config,
+                secrets,
+                listener,
+                source_reference=payload.get("source_reference"),
+            )
+        elif job_kind == "pdf":
+            result = run_pdf_pipeline(
                 payload["file_path"],
                 app_config,
                 secrets,

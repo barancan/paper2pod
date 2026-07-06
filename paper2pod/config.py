@@ -67,6 +67,7 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         "host": "127.0.0.1",
         "port": 8000,
         "max_upload_mb": 2,
+        "max_pdf_mb": 32,
         "job_db": "jobs.db",
         "job_retention_days": 30,
         "allowed_openlabs_hosts": [],
@@ -144,6 +145,8 @@ class ApiConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = 8000
     max_upload_mb: int = 2
+    # Separate, larger cap for PDF uploads (Anthropic accepts up to 32 MB).
+    max_pdf_mb: int = 32
     job_db: str = "jobs.db"
     job_retention_days: int = 30
     # Empty means: only the host of openlabs.base_url is accepted.

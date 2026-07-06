@@ -1,13 +1,14 @@
 # paper2pod
 
-paper2pod is a Python CLI that turns a research paper (as a `.md` file) or
-an OpenLabs project into an energetic narration, renders it to
+paper2pod is a Python CLI that turns a research paper (as a `.md` or `.pdf`
+file) or an OpenLabs project into an energetic narration, renders it to
 a realistic AI voice recording, and uploads the result to Supabase Storage.
 
 Pipeline: get the source content (parse a paper, or fetch an OpenLabs
 project), generate a narration transcript with an LLM, append a spoken call
 to action, synthesize audio, upload it, done. One command, under 90 seconds
-on a typical laptop, network permitting.
+on a typical laptop, network permitting. PDFs are sent natively to Claude, so
+that path requires the `anthropic` transcript provider.
 
 ## Prerequisites
 
@@ -51,9 +52,11 @@ reference below). Never commit `.env`, it's already covered by
    ```bash
    paper2pod run tests/fixtures/sample_paper.md --dry-run
    ```
-5. **Run the full pipeline:**
+5. **Run the full pipeline** (accepts a `.md` or `.pdf`; the extension picks
+   the ingestion path):
    ```bash
    paper2pod run path/to/your_paper.md
+   paper2pod run path/to/your_paper.pdf
    ```
    On success this prints the public or signed URL of the uploaded MP3, and
    records the episode so it's browsable with `paper2pod list`/`paper2pod show`.

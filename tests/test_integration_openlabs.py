@@ -33,7 +33,14 @@ def _fake_project(title="Steam Collective: Where Heat Meets Science", team=None)
 
 
 def _fake_generate(
-    paper_text, metadata, style_config, secrets=None, call_fn=None, cta_config=None, style="paper"
+    paper_text,
+    metadata,
+    style_config,
+    secrets=None,
+    call_fn=None,
+    cta_config=None,
+    style="paper",
+    pdf_document=None,
 ):
     return Transcript(
         text=FAKE_BRIEF_TEXT.strip(),
