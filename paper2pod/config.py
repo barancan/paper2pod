@@ -63,6 +63,15 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         "cache_ttl_hours": 24,
         "min_content_words": 200,
     },
+    "api": {
+        "host": "127.0.0.1",
+        "port": 8000,
+        "max_upload_mb": 2,
+        "max_pdf_mb": 32,
+        "job_db": "jobs.db",
+        "job_retention_days": 30,
+        "allowed_openlabs_hosts": [],
+    },
 }
 
 
@@ -132,6 +141,18 @@ class OpenLabsConfig(BaseModel):
     min_content_words: int = 200
 
 
+class ApiConfig(BaseModel):
+    host: str = "127.0.0.1"
+    port: int = 8000
+    max_upload_mb: int = 2
+    # Separate, larger cap for PDF uploads (Anthropic accepts up to 32 MB).
+    max_pdf_mb: int = 32
+    job_db: str = "jobs.db"
+    job_retention_days: int = 30
+    # Empty means: only the host of openlabs.base_url is accepted.
+    allowed_openlabs_hosts: list[str] = []
+
+
 class AppConfig(BaseModel):
     transcript: TranscriptConfig = TranscriptConfig()
     tts: TTSConfig = TTSConfig()
@@ -139,6 +160,7 @@ class AppConfig(BaseModel):
     logging: LoggingConfig = LoggingConfig()
     cta: CTAConfig = CTAConfig()
     openlabs: OpenLabsConfig = OpenLabsConfig()
+    api: ApiConfig = ApiConfig()
 
 
 class Secrets(BaseSettings):
@@ -151,6 +173,28 @@ class Secrets(BaseSettings):
     elevenlabs_api_key: str | None = None
     supabase_url: str | None = None
     supabase_service_role_key: str | None = None
+    api_auth_token: str | None = None
+
+
+def build_overrides(
+    voice: str | None = None,
+    model: str | None = None,
+    cta_enabled: bool | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Build a cli_overrides-shaped dict for load_config(), shared by the CLI and API.
+
+    Both front ends produce overrides the identical way, so "same precedence
+    rules as CLI flags" (CLI/request overrides > env > yaml > defaults) holds
+    by construction rather than by two separately-maintained implementations.
+    """
+    overrides: dict[str, dict[str, Any]] = {}
+    if voice:
+        overrides["tts"] = {"voice": voice}
+    if model:
+        overrides["transcript"] = {"model": model}
+    if cta_enabled is not None:
+        overrides["cta"] = {"enabled": cta_enabled}
+    return overrides
 
 
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
@@ -246,3 +290,9 @@ def validate_supabase_secrets(secrets: Secrets) -> None:
         raise _missing_var_error("SUPABASE_URL")
     if not secrets.supabase_service_role_key:
         raise _missing_var_error("SUPABASE_SERVICE_ROLE_KEY")
+
+
+def validate_api_secrets(secrets: Secrets) -> None:
+    """Fail fast for `paper2pod serve`: no accidental open server."""
+    if not secrets.api_auth_token:
+        raise _missing_var_error("API_AUTH_TOKEN")

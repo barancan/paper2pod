@@ -7,8 +7,8 @@
 create table if not exists episodes (
   id uuid primary key default gen_random_uuid(),
   episode_name text not null,              -- "[TITLE] - [AUTHORS]", matches audio filename stem
-  source_type text not null check (source_type in ('markdown', 'openlabs')),
-  source_reference text not null,          -- original file path or OpenLabs project URL
+  source_type text not null check (source_type in ('markdown', 'openlabs', 'pdf')),
+  source_reference text not null,          -- original file path, PDF path, or OpenLabs project URL
   title text not null,
   authors_or_team text not null,
   transcript_text text not null,           -- full generated script, CTA included

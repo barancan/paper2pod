@@ -11,6 +11,7 @@ import pytest
 from typer.testing import CliRunner
 
 from paper2pod import cli as cli_module
+from paper2pod import pipeline as pipeline_module
 from paper2pod.config import DEFAULT_CTA_TEXT, Secrets
 from paper2pod.storage import UploadResult
 from paper2pod.transcript import Transcript
@@ -33,7 +34,14 @@ class FakeTTSProvider:
 
 
 def _fake_generate(
-    paper_text, metadata, style_config, secrets=None, call_fn=None, cta_config=None, style="paper"
+    paper_text,
+    metadata,
+    style_config,
+    secrets=None,
+    call_fn=None,
+    cta_config=None,
+    style="paper",
+    pdf_document=None,
 ):
     return Transcript(
         text=FAKE_TRANSCRIPT_TEXT.strip(),
@@ -64,7 +72,7 @@ def _clean_env(monkeypatch):
 
 def test_dry_run_stops_before_tts_and_prints_transcript(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
-    monkeypatch.setattr(cli_module, "generate_transcript", _fake_generate)
+    monkeypatch.setattr(pipeline_module, "generate_transcript", _fake_generate)
 
     result = runner.invoke(cli_module.app, ["run", str(FIXTURES / "frontmatter.md"), "--dry-run"])
 
@@ -152,10 +160,10 @@ def test_full_pipeline_uploads_and_prints_url(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     monkeypatch.setenv("SUPABASE_URL", "https://fake.supabase.co")
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "sk-service-test")
-    monkeypatch.setattr(cli_module, "generate_transcript", _fake_generate)
+    monkeypatch.setattr(pipeline_module, "generate_transcript", _fake_generate)
 
     fake_tts = FakeTTSProvider()
-    monkeypatch.setattr(cli_module, "get_provider", lambda tts_config, secrets: fake_tts)
+    monkeypatch.setattr(pipeline_module, "get_provider", lambda tts_config, secrets: fake_tts)
     monkeypatch.setattr("supabase.create_client", lambda url, key: object())
 
     upload_calls = []
@@ -169,7 +177,7 @@ def test_full_pipeline_uploads_and_prints_url(monkeypatch):
             is_public=True,
         )
 
-    monkeypatch.setattr(cli_module, "upload_recording", fake_upload)
+    monkeypatch.setattr(pipeline_module, "upload_recording", fake_upload)
 
     result = runner.invoke(cli_module.app, ["run", str(FIXTURES / "frontmatter.md")])
 
@@ -204,7 +212,7 @@ def test_tts_failure_exits_5(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     monkeypatch.setenv("SUPABASE_URL", "https://fake.supabase.co")
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "sk-service-test")
-    monkeypatch.setattr(cli_module, "generate_transcript", _fake_generate)
+    monkeypatch.setattr(pipeline_module, "generate_transcript", _fake_generate)
 
     class FailingTTSProvider:
         def synthesize(self, text, out_path):
@@ -213,7 +221,7 @@ def test_tts_failure_exits_5(monkeypatch):
             raise TTSError("network unreachable")
 
     monkeypatch.setattr(
-        cli_module, "get_provider", lambda tts_config, secrets: FailingTTSProvider()
+        pipeline_module, "get_provider", lambda tts_config, secrets: FailingTTSProvider()
     )
 
     result = runner.invoke(cli_module.app, ["run", str(FIXTURES / "frontmatter.md")])

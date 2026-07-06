@@ -12,14 +12,15 @@ Target runtime per paper: under 90 seconds on a standard laptop, network permitt
 
 ## 2. Goals
 
-1. One command converts a `.md` file into an uploaded audio file.
+1. One command converts a `.md` or `.pdf` file into an uploaded audio file. PDFs
+   are sent natively to Claude (Anthropic provider only).
 2. Transcript model is configurable (provider + model string) via config file.
 3. TTS is free by default, with a pluggable provider interface for keyed services.
 4. Live progress in the terminal for each pipeline stage.
 5. Recording named `[TITLE-OF-THE-RESEARCH] - [AUTHORS]`.
 6. All errors logged to file with context.
 
-Non-goals (v0.1): batch processing, video generation, PDF input, background music, a web UI.
+Non-goals (v0.1): batch processing, video generation, background music, a web UI.
 
 ## 3. Architecture
 
@@ -31,6 +32,7 @@ paper2pod/
 │   ├── cli.py               # Typer entrypoint, orchestration, progress UI
 │   ├── config.py            # pydantic-settings config loader (yaml + env)
 │   ├── parser.py            # md loading, frontmatter + LLM metadata extraction
+│   ├── pdf.py               # pdf loading, native Anthropic document block + metadata
 │   ├── transcript.py        # LLM transcript generation (provider-agnostic)
 │   ├── tts/
 │   │   ├── base.py          # TTSProvider protocol

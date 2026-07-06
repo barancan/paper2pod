@@ -102,11 +102,13 @@ class Transcript:
     estimated_duration_s: float
 
 
-ProviderCall = Callable[[str, str, list[dict[str, str]]], str]
+# Message content may be a plain string (markdown/OpenLabs) or a list of
+# content blocks (PDF: a document block + a text block), so it's typed loosely.
+ProviderCall = Callable[[str, str, list[dict[str, Any]]], str]
 
 
 def _anthropic_messages_call(
-    model: str, system: str, messages: list[dict[str, str]], secrets: Any
+    model: str, system: str, messages: list[dict[str, Any]], secrets: Any
 ) -> str:
     import anthropic
 
@@ -116,7 +118,7 @@ def _anthropic_messages_call(
 
 
 def _openai_messages_call(
-    model: str, system: str, messages: list[dict[str, str]], secrets: Any
+    model: str, system: str, messages: list[dict[str, Any]], secrets: Any
 ) -> str:
     import openai
 
@@ -147,7 +149,7 @@ def _is_retryable(exc: BaseException) -> bool:
 
 
 def _call_with_retry(
-    call: ProviderCall, model: str, system: str, messages: list[dict[str, str]]
+    call: ProviderCall, model: str, system: str, messages: list[dict[str, Any]]
 ) -> str:
     @retry(
         stop=stop_after_attempt(3),
@@ -176,10 +178,18 @@ def _build_user_prompt(
         style, USER_PROMPT_LABELS["paper"]
     )
     who = ", ".join(metadata.authors) if metadata.authors else "the researchers"
+    # When paper_text is empty the content is supplied out-of-band as an
+    # attached PDF document block, so point the model at that instead of
+    # emitting an empty "Paper content:" section.
+    content_section = (
+        f"{content_label}:\n{paper_text}"
+        if paper_text.strip()
+        else f"{content_label}: the full paper is attached as a PDF document."
+    )
     return (
         f"{subject_label}: {metadata.title}\n"
         f"{who_label}: {who}\n\n"
-        f"{content_label}:\n{paper_text}\n\n"
+        f"{content_section}\n\n"
         f"Write the narration script now, {min_words}-{max_words} words."
     )
 
@@ -210,16 +220,28 @@ def generate(
     call_fn: ProviderCall | None = None,
     cta_config: Any = None,
     style: str = "paper",
+    pdf_document: dict[str, Any] | None = None,
 ) -> Transcript:
     """Generate an enthusiastic narration transcript for the given content.
 
     style selects the system prompt / user-prompt labels: "paper" (default,
     Two Minute Papers style) or "project_brief" (OpenLabs project spotlight).
 
+    When pdf_document is provided (a native Anthropic document block), the paper
+    is sent to the model as the PDF itself rather than as paper_text, which is
+    then ignored. This path is Anthropic-only. The word-budget compression
+    follow-up stays text and does not resend the PDF.
+
     The LLM's 320-420 word budget applies to the body only. If cta_config is
     enabled, its text is appended verbatim afterward -- it is never sent to
     the LLM, so the configured wording is guaranteed to be what gets spoken.
     """
+    if pdf_document is not None and style_config.provider != "anthropic":
+        raise TranscriptError(
+            "PDF ingestion requires the anthropic transcript provider "
+            f"(configured provider is '{style_config.provider}')."
+        )
+
     call = call_fn or _bind_provider_call(style_config.provider, secrets)
     min_words, max_words = style_config.target_words
 
@@ -228,7 +250,12 @@ def generate(
         raise TranscriptError(f"Unknown transcript style: {style}")
     system_prompt = template.format(min_words=min_words, max_words=max_words)
     user_prompt = _build_user_prompt(metadata, paper_text, min_words, max_words, style)
-    messages: list[dict[str, str]] = [{"role": "user", "content": user_prompt}]
+    content: str | list[dict[str, Any]] = (
+        [pdf_document, {"type": "text", "text": user_prompt}]
+        if pdf_document is not None
+        else user_prompt
+    )
+    messages: list[dict[str, Any]] = [{"role": "user", "content": content}]
 
     body_text = _clean_plain_speech(
         _call_with_retry(call, style_config.model, system_prompt, messages)
